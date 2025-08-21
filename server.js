@@ -1,34 +1,37 @@
 // ============================================================
 // Express.js Pathfinding Server (server.js)
-// with Fuel-Aware Pathfinding, Depth Data & Port Search
+// with Fuel-Aware Pathfinding & Depth Data
 // ============================================================
 
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const csv = require('csv-parser'); // CSV parsing library
 
 const NavigationGrid = require('./navigation-grid.js');
 const AStarPathfinder = require('./a-star-pathfinder.js');
+const DepthGrid = require('./depth-grid.js');
 
 const app = express();
-const port = 3000;
+// IMPROVEMENT: Use the port from environment variables or default to 3001.
+// This allows you to run `node server.js` (uses 3001) or `PORT=5000 node server.js` (uses 5000).
+const port = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json({ limit: '50mb' }));
 
+// Variable to hold the depth data
 let landGrid = null;
-let depthGrid = null;   // now will hold raw JSON object, not NavigationGrid
-let portData = [];      // cache for port data
+let depthGrid = null;
 
 function initializeServer() {
     console.log('Server starting up...');
     const landCachePath = path.join(__dirname, 'grid-cache.json');
+    
+    // Path for the depth cache file
     const depthCachePath = path.join(__dirname, 'depth-cache.json');
 
-    // --- Load Land Grid ---
     if (fs.existsSync(landCachePath)) {
         console.log('Loading land navigation grid from cache...');
         landGrid = new NavigationGrid(JSON.parse(fs.readFileSync(landCachePath)));
@@ -37,59 +40,21 @@ function initializeServer() {
         console.error('CRITICAL: grid-cache.json not found. Please generate it.');
     }
 
-    // --- Load Depth Grid (raw JSON, not NavigationGrid) ---
+    // Logic to load the depth grid from cache
     if (fs.existsSync(depthCachePath)) {
         console.log('Loading depth grid from cache...');
-        depthGrid = JSON.parse(fs.readFileSync(depthCachePath));
+        depthGrid = new DepthGrid(JSON.parse(fs.readFileSync(depthCachePath)));
         console.log('Depth grid loaded.');
     } else {
         console.warn('WARNING: depth-cache.json not found. Heatmap will not be available.');
     }
 
-    // --- Load Port Data from CSV ---
-    const portFilePath = path.join(__dirname, 'WorldPort_2025.csv');
-    if (fs.existsSync(portFilePath)) {
-        console.log('Loading port data from CSV...');
-        fs.createReadStream(portFilePath)
-            .pipe(csv())
-            .on('data', (row) => {
-                const lat = parseFloat(row['Latitude']);
-                const lng = parseFloat(row['Longitude']);
-                const portName = row['Main Port Name'];
-                const country = row['Country Code'];
-
-                if (portName && country && !isNaN(lat) && !isNaN(lng)) {
-                    portData.push({
-                        name: `${portName}, ${country}`,
-                        lat: lat,
-                        lng: lng
-                    });
-                }
-            })
-            .on('end', () => {
-                console.log(`Successfully loaded ${portData.length} ports.`);
-                console.log('Server is ready.');
-            });
-    } else {
-        console.error('CRITICAL: WorldPort_2025.csv not found.');
-        console.log('Server is ready (but port search will not work).');
-    }
+    console.log('Server is ready.');
 }
 
-// ============================================================
-// API ENDPOINTS
-// ============================================================
+// --- API ENDPOINTS ---
 
-// --- Serve Port Data ---
-app.get('/api/ports', (req, res) => {
-    if (portData.length > 0) {
-        res.json(portData);
-    } else {
-        res.status(503).json({ error: 'Port data is not ready or failed to load.' });
-    }
-});
-
-// --- Fuel-aware Route (A* pathfinding) ---
+// Fuel-aware route endpoint
 app.get('/api/route', (req, res) => {
     if (!landGrid) {
         return res.status(503).json({ error: 'Pathfinder is not ready yet.' });
@@ -105,7 +70,8 @@ app.get('/api/route', (req, res) => {
         const startCoords = start.split(',').map(Number);
         const endCoords = end.split(',').map(Number);
         
-        const pathfinder = new AStarPathfinder();
+        // The depthGrid object is now passed to the AStarPathfinder constructor
+        const pathfinder = new AStarPathfinder(depthGrid);
 
         const params = {
             speed: parseFloat(speed),
@@ -118,12 +84,7 @@ app.get('/api/route', (req, res) => {
             S: parseFloat(S)
         };
 
-        const path = pathfinder.findPath(
-            landGrid,
-            { lat: startCoords[0], lng: startCoords[1] },
-            { lat: endCoords[0], lng: endCoords[1] },
-            params
-        );
+        const path = pathfinder.findPath(landGrid, { lat: startCoords[0], lng: startCoords[1] }, { lat: endCoords[0], lng: endCoords[1] }, params);
         
         res.json(path || []);
     } catch (error) {
@@ -132,28 +93,22 @@ app.get('/api/route', (req, res) => {
     }
 });
 
-// --- Land Grid ---
+// Land grid endpoint
 app.get('/api/grid', (req, res) => {
     if (!landGrid) return res.status(503).json({ error: 'Grid data is not ready.' });
-    res.json({
-        grid: landGrid.grid,
-        bounds: landGrid.bounds,
-        resolution: landGrid.resolution
-    });
+    res.json({ grid: landGrid.grid, bounds: landGrid.bounds, resolution: landGrid.resolution });
 });
 
-// --- Depth Grid (raw JSON from Python) ---
+// Depth data endpoint for the heatmap
 app.get('/api/depth', (req, res) => {
     if (!depthGrid) return res.status(404).json({ error: 'Depth data not found.' });
-    res.json(depthGrid);
+    res.json({ grid: depthGrid.grid, bounds: depthGrid.bounds, resolution: depthGrid.resolution });
 });
 
-// --- Save Updated Grid (land) ---
+// Endpoint to save a new copy of the grid data
 app.post('/api/grid/update', (req, res) => {
     const newGridData = req.body;
-    if (!newGridData || !newGridData.grid) {
-        return res.status(400).json({ error: 'Invalid grid data.' });
-    }
+    if (!newGridData || !newGridData.grid) return res.status(400).json({ error: 'Invalid grid data.' });
     try {
         const timestamp = Date.now();
         const newCacheFilename = `grid-cache-${timestamp}.json`;
@@ -167,9 +122,7 @@ app.post('/api/grid/update', (req, res) => {
     }
 });
 
-// ============================================================
-// START SERVER
-// ============================================================
+// --- START THE SERVER ---
 app.listen(port, () => {
     initializeServer();
     console.log(`Pathfinding server listening at http://localhost:${port}`);
