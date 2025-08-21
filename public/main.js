@@ -6,6 +6,7 @@
 
 // --- INITIALIZATION ---
 const messageBox = document.getElementById('messageBox');
+let landLayer;
 let currentPath = [];
 
 // --- STATE MANAGEMENT ---
@@ -14,10 +15,6 @@ let startPoint = null;
 let endPoint = null;
 let startMarker = null;
 let endMarker = null;
-
-// --- Animation State ---
-let boatAnimator = null; // Will be an instance of the class
-let isAnimationEnabled = false;
 
 // --- Grid and Heatmap State ---
 let gridLayer = L.layerGroup();
@@ -30,9 +27,8 @@ let routeLayer = L.layerGroup();
 let heatLayer = null;
 let isHeatmapVisible = false;
 let depthDataCache = null;
-let portData = [];
 
-// --- Ship Type Presets ---
+// --- NEW: Ship Type Presets ---
 const shipTypeDefaults = {
     fishing_trawler: { baseWeight: 1500, load: 500, speed: 10, draft: 5, hpReq: 2000, fuelRate: 0.22 },
     handysize_bulk: { baseWeight: 20000, load: 35000, speed: 14, draft: 10, hpReq: 8000, fuelRate: 0.2 },
@@ -43,7 +39,7 @@ const shipTypeDefaults = {
 };
 
 // --- MAP SETUP ---
-const map = L.map('map', { center: [1.3521, 103.8198], zoom: 7, zoomControl: false, doubleClickZoom: false });
+const map = L.map('map', { center: [1.3521, 103.8198], zoom: 7, zoomControl: false });
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
     subdomains: 'abcd', maxZoom: 20
@@ -52,83 +48,32 @@ L.control.zoom({ position: 'bottomright' }).addTo(map);
 
 // --- APPLICATION INITIALIZATION ---
 function initializeApp() {
-    showMessage('Map ready. Use the search or double-click to set a route.', 'green');
+    showMessage('Map ready. Click to set a starting point.', 'green');
     routeLayer.addTo(map);
-    // FIX: Initialize the animator class as soon as the app starts
-    boatAnimator = new BoatAnimator(map);
     
     // Event listeners...
     map.on('moveend zoomend', () => { if (isGridVisible) drawGrid(); });
-    map.on('mousedown', (e) => { if (editMode) { isDrawing = true; drawMode = (e.originalEvent.button === 0) ? 'draw' : 'erase'; editGridCell(e); } });
+    map.on('mousedown', (e) => {
+        if (editMode) {
+            isDrawing = true;
+            drawMode = (e.originalEvent.button === 0) ? 'draw' : 'erase';
+            editGridCell(e);
+        }
+    });
     map.on('mousemove', (e) => { if (editMode && isDrawing) editGridCell(e); });
     window.addEventListener('mouseup', () => { isDrawing = false; });
     map.on('contextmenu', (e) => { if (editMode) L.DomEvent.preventDefault(e); });
     document.addEventListener('keydown', (e) => { if (e.code === 'Space' && editMode) { map.dragging.enable(); L.DomUtil.addClass(map._container, 'pan-cursor'); } });
     document.addEventListener('keyup', (e) => { if (e.code === 'Space' && editMode) { map.dragging.disable(); L.DomUtil.removeClass(map._container, 'pan-cursor'); } });
 
+    // --- NEW: Initialize Ship Parameters and Tooltips ---
     document.getElementById('shipType').addEventListener('change', updateShipParameters);
-    updateShipParameters(); // Set initial default values on load
+    updateShipParameters(); // Load defaults for the initial selection
     initializeTooltips();
-    loadPortData();
-    setupSearchListeners();
 }
 
-// --- Port Search Functions ---
-function loadPortData() {
-    fetch('/api/ports')
-        .then(response => {
-            if (!response.ok) throw new Error('Failed to load port data');
-            return response.json();
-        })
-        .then(data => {
-            portData = data;
-            const portsList = document.getElementById('ports-list');
-            if (portsList) {
-                portsList.innerHTML = portData.map(port => `<option value="${port.name}"></option>`).join('');
-            }
-            showMessage('Port data loaded.', 'green');
-        }).catch(error => {
-            console.error('Error fetching port data:', error);
-            showMessage('Could not load port data from server.', 'red');
-        });
-}
+// --- NEW: Functions for Ship Presets and Tooltips ---
 
-function setupSearchListeners() {
-    const startInput = document.getElementById('startPort');
-    const endInput = document.getElementById('endPort');
-
-    const handleSelection = () => {
-        resetNavigation(false);
-        const startValue = startInput.value;
-        const endValue = endInput.value;
-        const startPort = portData.find(p => p.name === startValue);
-        const endPort = portData.find(p => p.name === endValue);
-        
-        if (startMarker) map.removeLayer(startMarker);
-        if (endMarker) map.removeLayer(endMarker);
-        
-        if (startPort) {
-            startPoint = L.latLng(startPort.lat, startPort.lng);
-            startMarker = L.circleMarker(startPoint, { color: '#10b981', radius: 8, fillOpacity: 0.8 }).addTo(map);
-        }
-
-        if (endPort) {
-            endPoint = L.latLng(endPort.lat, endPort.lng);
-            endMarker = L.circleMarker(endPoint, { color: '#ef4444', radius: 8, fillOpacity: 0.8 }).addTo(map);
-        }
-
-        if (startPort && endPort) {
-            const bounds = L.latLngBounds([startPoint, endPoint]);
-            map.fitBounds(bounds.pad(0.2));
-            calculateAndFetchRoute(startPoint, endPoint);
-        }
-    };
-
-    startInput.addEventListener('change', handleSelection);
-    endInput.addEventListener('change', handleSelection);
-}
-
-// --- Ship Presets and Tooltips ---
 function updateShipParameters() {
     const selectedType = document.getElementById('shipType').value;
     const defaults = shipTypeDefaults[selectedType];
@@ -145,107 +90,89 @@ function updateShipParameters() {
 function initializeTooltips() {
     const labels = document.querySelectorAll('.info-label');
     const tooltip = document.getElementById('tooltip');
+
     labels.forEach(label => {
-        label.addEventListener('mouseenter', e => {
+        label.addEventListener('mouseenter', (e) => {
             tooltip.textContent = e.target.dataset.tooltip;
             tooltip.style.opacity = '1';
             tooltip.style.display = 'block';
         });
-        label.addEventListener('mousemove', e => {
+
+        label.addEventListener('mousemove', (e) => {
+            // Position the tooltip near the cursor
             tooltip.style.left = `${e.clientX + 15}px`;
             tooltip.style.top = `${e.clientY + 15}px`;
         });
+
         label.addEventListener('mouseleave', () => {
             tooltip.style.opacity = '0';
-            // Use a short timeout to prevent flickering
-            setTimeout(() => { if (tooltip.style.opacity === '0') tooltip.style.display = 'none'; }, 200);
+            setTimeout(() => { tooltip.style.display = 'none'; }, 200); // Hide after fade out
         });
     });
 }
 
-// --- NAVIGATION & ROUTING LOGIC ---
-function calculateAndFetchRoute(start, end) {
-    boatAnimator.stopAnimation();
-    showMessage('Calculating route...', 'blue');
-    navigationState = 'CALCULATING';
-    
-    const params = {
-        speed: document.getElementById('shipSpeed').value,
-        draft: document.getElementById('shipDraft').value,
-        hpReq: document.getElementById('hpReq').value,
-        fuelRate: document.getElementById('fuelRate').value,
-        k: document.getElementById('hullFactor').value,
-        baseWeight: document.getElementById('baseWeight').value,
-        load: document.getElementById('load').value,
-        F: document.getElementById('foulingFactor').value,
-        S: document.getElementById('seaStateFactor').value
-    };
 
-    // FIX: Check for empty required parameters to prevent 400 Bad Request error
-    for (const key in params) {
-        if (!params[key] && params[key] !== 0) {
-            showMessage(`Error: Parameter '${key}' is missing. Please check vessel inputs.`, 'red');
-            navigationState = 'SET_END'; // Allow user to try again without resetting points
-            return;
-        }
-    }
-
-    const startCoords = `${start.lat},${start.lng}`;
-    const endCoords = `${end.lat},${end.lng}`;
-    const queryString = `start=${startCoords}&end=${endCoords}&` + 
-                        Object.entries(params).map(([key, value]) => `${key}=${value}`).join('&');
-
-    fetch(`/api/route?${queryString}`)
-        .then(response => {
-            if (!response.ok) throw new Error(`Server error: ${response.statusText}`);
-            return response.json();
-        })
-        .then(path => {
-            currentPath = path;
-            if (path && path.length > 0) {
-                drawMultiColorPath(path);
-                calculateAndDisplayMetrics(path, params.speed);
-                navigationState = 'ROUTE_DISPLAYED';
-                showMessage('Route found.', 'green');
-                if (isAnimationEnabled) {
-                    boatAnimator.startAnimation(path);
-                }
-            } else {
-                currentPath = [];
-                showMessage('No valid route found. Try another point.', 'red');
-                navigationState = 'SET_START';
-            }
-        }).catch(error => {
-            currentPath = [];
-            console.error('Error fetching route:', error);
-            showMessage('Could not connect to the routing server.', 'red');
-            navigationState = 'SET_START';
-        });
-}
-
+// --- NAVIGATION & EDITING LOGIC ---
 function onMapClick(e) {
     if (editMode || navigationState === 'CALCULATING') return;
-    if (navigationState === 'ROUTE_DISPLAYED') {
-        resetNavigation(true);
-        document.getElementById('startPort').value = '';
-        document.getElementById('endPort').value = '';
-    }
+    if (navigationState === 'ROUTE_DISPLAYED') resetNavigation(false);
+
     if (navigationState === 'SET_START') {
         startPoint = e.latlng;
         if (startMarker) map.removeLayer(startMarker);
         startMarker = L.circleMarker(startPoint, { color: '#10b981', radius: 8, fillOpacity: 0.8 }).addTo(map);
         navigationState = 'SET_END';
-        showMessage('Start point set. Double-click to set destination.', 'blue');
+        showMessage('Start point set. Click to set destination.', 'blue');
     } else if (navigationState === 'SET_END') {
         endPoint = e.latlng;
-        if (endMarker) map.removeLayer(endMarker);
-        endMarker = L.circleMarker(endPoint, { color: '#ef4444', radius: 8, fillOpacity: 0.8 }).addTo(map);
-        calculateAndFetchRoute(startPoint, endPoint);
+        showMessage('Calculating route...', 'blue');
+        navigationState = 'CALCULATING';
+        
+        const params = {
+            speed: document.getElementById('shipSpeed').value,
+            draft: document.getElementById('shipDraft').value,
+            hpReq: document.getElementById('hpReq').value,
+            fuelRate: document.getElementById('fuelRate').value,
+            k: document.getElementById('hullFactor').value,
+            baseWeight: document.getElementById('baseWeight').value,
+            load: document.getElementById('load').value,
+            F: document.getElementById('foulingFactor').value,
+            S: document.getElementById('seaStateFactor').value
+        };
+
+        const startCoords = `${startPoint.lat},${startPoint.lng}`;
+        const endCoords = `${endPoint.lat},${endPoint.lng}`;
+        const queryString = `start=${startCoords}&end=${endCoords}&` + 
+                            Object.entries(params).map(([key, value]) => `${key}=${value}`).join('&');
+
+        fetch(`/api/route?${queryString}`)
+            .then(response => {
+                if (!response.ok) throw new Error(`Server error: ${response.statusText}`);
+                return response.json();
+            })
+            .then(path => {
+                if (path && path.length > 0) {
+                    if (endMarker) map.removeLayer(endMarker);
+                    endMarker = L.circleMarker(endPoint, { color: '#ef4444', radius: 8, fillOpacity: 0.8 }).addTo(map);
+                    drawMultiColorPath(path);
+                    calculateAndDisplayMetrics(path, params.speed);
+                    navigationState = 'ROUTE_DISPLAYED';
+                    showMessage('Route found.', 'green');
+                } else {
+                    showMessage('No valid route found. Try another point.', 'red');
+                    navigationState = 'SET_END';
+                }
+            }).catch(error => {
+                console.error('Error fetching route:', error);
+                showMessage('Could not connect to the routing server.', 'red');
+                navigationState = 'SET_END';
+            });
     }
 }
-map.on('dblclick', onMapClick);
+map.on('click', onMapClick);
 
 function drawMultiColorPath(path) {
+    // This function remains the same...
     routeLayer.clearLayers();
     if (!path || path.length < 2) return;
     let currentSegment = [];
@@ -258,10 +185,8 @@ function drawMultiColorPath(path) {
         const terrainChanged = point.onLand !== currentTerrain;
         const worldWrapped = i > 0 && Math.abs(point.lng - path[i - 1].lng) > 180;
         if (terrainChanged || worldWrapped) {
-            if (currentSegment.length > 0) {
-                 if (terrainChanged && !worldWrapped) currentSegment.push(latLng);
-                 if (currentSegment.length > 1) L.polyline(currentSegment, currentTerrain ? landStyle : waterStyle).addTo(routeLayer);
-            }
+            if (terrainChanged && !worldWrapped) currentSegment.push(latLng);
+            if (currentSegment.length > 1) L.polyline(currentSegment, currentTerrain ? landStyle : waterStyle).addTo(routeLayer);
             currentSegment = [latLng];
             currentTerrain = point.onLand;
         } else {
@@ -278,6 +203,7 @@ function calculateAndDisplayMetrics(path, speed) {
         const to = turf.point([path[i].lng, path[i].lat]);
         totalDistanceKm += turf.distance(from, to, { units: 'kilometers' });
     }
+    
     const totalFuelLiters = path[path.length - 1].totalFuel;
     if (totalFuelLiters === undefined) {
         console.error("Path data does not include totalFuel.");
@@ -285,24 +211,22 @@ function calculateAndDisplayMetrics(path, speed) {
     }
     
     const speedKmh = speed * 1.852;
-    const totalHours = speedKmh > 0 ? totalDistanceKm / speedKmh : 0; 
+    const totalHours = totalDistanceKm / speedKmh; 
     const days = Math.floor(totalHours / 24);
     const remainingHours = Math.round(totalHours % 24);
     const carbonTons = totalFuelLiters * 0.0023;
 
     const metricsDisplay = document.getElementById('metrics-display');
-    metricsDisplay.innerHTML = `
-        <div class="flex justify-between items-center mb-2"><span class="text-gray-400">Travel Time:</span><span class="font-bold text-blue-400">${days}d ${remainingHours}h</span></div>
-        <div class="flex justify-between items-center mb-2"><span class="text-gray-400">Total Distance:</span><span class="font-bold text-blue-400">${totalDistanceKm.toFixed(0)} km</span></div>
-        <div class="flex justify-between items-center mb-2"><span class="text-gray-400">Fuel Consumed:</span><span class="font-bold text-blue-400">${totalFuelLiters.toFixed(0)} L</span></div>
-        <div class="flex justify-between items-center"><span class="text-gray-400">CO₂ Emissions:</span><span class="font-bold text-blue-400">${carbonTons.toFixed(2)} tons</span></div>`;
+    document.getElementById('eta-value').textContent = `${days}d ${remainingHours}h`;
+    document.getElementById('distance-value').textContent = `${totalDistanceKm.toFixed(0)} km`;
+    document.getElementById('fuel-value').textContent = `${totalFuelLiters.toFixed(0)} L`;
+    document.getElementById('carbon-value').textContent = `${carbonTons.toFixed(2)} tons`;
     
     metricsDisplay.classList.remove('hidden');
 }
 
+
 function resetNavigation(showMsg = true) {
-    boatAnimator.stopAnimation();
-    currentPath = [];
     navigationState = 'SET_START';
     startPoint = null;
     endPoint = null;
@@ -312,12 +236,10 @@ function resetNavigation(showMsg = true) {
     startMarker = null;
     endMarker = null;
     document.getElementById('metrics-display').classList.add('hidden');
-    if (showMsg) {
-        showMessage('Route cleared. Ready for new route.', 'blue');
-    }
+    if (showMsg) showMessage('Route cleared.', 'blue');
 }
 
-// --- Grid, Heatmap, and Edit Functions ---
+// All other functions (grid, heatmap, editing, etc.) remain the same...
 function toggleGrid(){if(isGridVisible){map.removeLayer(gridLayer);isGridVisible=false;showMessage("Grid hidden.","blue")}else{if(gridDataCache){drawGrid();map.addLayer(gridLayer);isGridVisible=true}else{showMessage("Fetching grid data...","yellow");fetch("/api/grid").then(response=>response.json()).then(data=>{gridDataCache=data;drawGrid();map.addLayer(gridLayer);isGridVisible=true;showMessage("Grid displayed.","green")}).catch(error=>{console.error("Error fetching grid:",error);showMessage("Failed to load grid data.","red")})}}}
 function drawGrid(){if(!gridDataCache)return;gridLayer.clearLayers();const{grid,bounds,resolution}=gridDataCache;const mapBounds=map.getBounds();const iMin=Math.max(0,Math.floor((mapBounds.getWest()-bounds.west)/resolution));const iMax=Math.min(grid.length-1,Math.ceil((mapBounds.getEast()-bounds.west)/resolution));const jMin=Math.max(0,Math.floor((mapBounds.getSouth()-bounds.south)/resolution));const jMax=Math.min(grid[0].length-1,Math.ceil((mapBounds.getNorth()-bounds.south)/resolution));const landStyle={color:"rgba(239, 68, 68, 0.5)",weight:1,fillOpacity:0.2};for(let i=iMin;i<=iMax;i++){for(let j=jMin;j<=jMax;j++){if(grid[i]&&grid[i][j]===1){const west=bounds.west+i*resolution;const south=bounds.south+j*resolution;const east=west+resolution;const north=south+resolution;L.rectangle([[south,west],[north,east]],landStyle).addTo(gridLayer)}}}}
 function toggleHeatmap(){if(isHeatmapVisible){if(heatLayer)map.removeLayer(heatLayer);isHeatmapVisible=false;showMessage("Depth heatmap hidden.","blue")}else{if(depthDataCache){drawHeatmap(depthDataCache);isHeatmapVisible=true}else{showMessage("Fetching depth data...","yellow");fetch("/api/depth").then(response=>{if(!response.ok){throw new Error(`Server returned ${response.status}: ${response.statusText}`)}return response.json()}).then(data=>{depthDataCache=data;drawHeatmap(data);isHeatmapVisible=true;showMessage("Depth heatmap displayed.","green")}).catch(error=>{console.error("Error fetching depth data:",error);showMessage("Failed to load depth data.","red")})}}}
@@ -327,23 +249,6 @@ function editGridCell(e){if(!gridDataCache)return;const{grid,bounds,resolution}=
 function saveGrid(){if(!gridDataCache){showMessage("No grid data to save.","red");return}showMessage("Saving a new copy of the grid to the server...","yellow");fetch("/api/grid/update",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(gridDataCache)}).then(response=>response.json()).then(data=>{showMessage(`${data.message} Filename: ${data.filename}`,"green")}).catch(error=>{console.error("Error saving grid:",error);showMessage("Failed to save grid.","red")})}
 function downloadGrid(){if(!gridDataCache){showMessage("No grid data to download.","red");return}showMessage("Preparing download...","blue");const dataStr="data:text/json;charset=utf-8,"+encodeURIComponent(JSON.stringify(gridDataCache));const downloadAnchorNode=document.createElement("a");downloadAnchorNode.setAttribute("href",dataStr);downloadAnchorNode.setAttribute("download",`edited-grid-cache-${Date.now()}.json`);document.body.appendChild(downloadAnchorNode);downloadAnchorNode.click();downloadAnchorNode.remove();showMessage("Download started.","green")}
 function uploadGrid(){const fileInput=document.createElement("input");fileInput.type="file";fileInput.accept=".json";fileInput.onchange=e=>{const file=e.target.files[0];if(!file)return;showMessage(`Reading ${file.name}...`,"blue");const reader=new FileReader;reader.onload=event=>{try{const uploadedData=JSON.parse(event.target.result);if(uploadedData.grid&&uploadedData.bounds&&uploadedData.hasOwnProperty("resolution")){gridDataCache=uploadedData;showMessage("Custom grid loaded successfully!","green");if(isGridVisible){drawGrid()}}else{showMessage("Invalid grid file format.","red")}}catch(error){console.error("Error parsing JSON file:",error);showMessage("Could not read the uploaded file.","red")}};reader.readAsText(file)};fileInput.click()}
-
-// --- Animation Control ---
-function toggleBoatAnimation() {
-    isAnimationEnabled = !isAnimationEnabled;
-    const animButton = document.getElementById('toggle-animation-button').parentElement;
-    if (isAnimationEnabled) {
-        showMessage('Boat animation ON.', 'green');
-        animButton.classList.add('toggled-on');
-        if (navigationState === 'ROUTE_DISPLAYED' && currentPath && currentPath.length > 0) {
-            boatAnimator.startAnimation(currentPath);
-        }
-    } else {
-        showMessage('Boat animation OFF.', 'blue');
-        animButton.classList.remove('toggled-on');
-        boatAnimator.stopAnimation();
-    }
-}
 
 // --- UTILITY & CONTROLS ---
 function showMessage(text, color = 'blue') {
@@ -375,7 +280,6 @@ const saveIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"
 const downloadIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-download"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`;
 const uploadIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-upload"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>`;
 const heatIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-thermometer"><path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"></path></svg>`;
-const boatIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-send"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>`;
 
 
 // --- Adding controls to the map ---
@@ -388,7 +292,6 @@ document.getElementById('save-grid-button').parentElement.classList.add('hidden'
 new CustomControl({ icon: downloadIcon, title: 'Download Grid', action: downloadGrid }).addTo(map);
 new CustomControl({ icon: uploadIcon, title: 'Upload Grid', action: uploadGrid }).addTo(map);
 new CustomControl({ icon: heatIcon, title: 'Toggle Depth Heatmap', action: toggleHeatmap }).addTo(map);
-new CustomControl({ id: 'toggle-animation-button', icon: boatIcon, title: 'Toggle Boat Animation', action: toggleBoatAnimation }).addTo(map);
 
 // Add custom cursor styles
 const style = document.createElement('style');
@@ -396,8 +299,6 @@ style.innerHTML = `
     .edit-cursor { cursor: cell !important; }
     .pan-cursor { cursor: grab !important; }
     .pan-cursor:active { cursor: grabbing !important; }
-    .leaflet-control.toggled-on a { background-color: #3b82f6 !important; } /* Toggled style */
-    .boat-icon-wrapper { transition: transform 0.1s linear; } /* Smooth rotation for the boat */
 `;
 document.head.appendChild(style);
 
