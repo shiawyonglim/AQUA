@@ -1,13 +1,12 @@
 // ============================================================
 // Express.js Pathfinding Server (server.js)
-// with Fuel-Aware Pathfinding, Depth Data & Port Search
 // ============================================================
 
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const csv = require('csv-parser'); // CSV parsing library
+const csv = require('csv-parser');
 
 const NavigationGrid = require('./navigation-grid.js');
 const AStarPathfinder = require('./a-star-pathfinder.js');
@@ -20,15 +19,15 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json({ limit: '50mb' }));
 
 let landGrid = null;
-let depthGrid = null;   // now will hold raw JSON object, not NavigationGrid
-let portData = [];      // cache for port data
+let depthGrid = null;
+let portData = [];
 
 function initializeServer() {
+    // ... initialization code remains the same ...
     console.log('Server starting up...');
     const landCachePath = path.join(__dirname, 'grid-cache.json');
     const depthCachePath = path.join(__dirname, 'depth-cache.json');
 
-    // --- Load Land Grid ---
     if (fs.existsSync(landCachePath)) {
         console.log('Loading land navigation grid from cache...');
         landGrid = new NavigationGrid(JSON.parse(fs.readFileSync(landCachePath)));
@@ -37,7 +36,6 @@ function initializeServer() {
         console.error('CRITICAL: grid-cache.json not found. Please generate it.');
     }
 
-    // --- Load Depth Grid (raw JSON, not NavigationGrid) ---
     if (fs.existsSync(depthCachePath)) {
         console.log('Loading depth grid from cache...');
         depthGrid = JSON.parse(fs.readFileSync(depthCachePath));
@@ -46,7 +44,6 @@ function initializeServer() {
         console.warn('WARNING: depth-cache.json not found. Heatmap will not be available.');
     }
 
-    // --- Load Port Data from CSV ---
     const portFilePath = path.join(__dirname, 'WorldPort_2025.csv');
     if (fs.existsSync(portFilePath)) {
         console.log('Loading port data from CSV...');
@@ -59,11 +56,7 @@ function initializeServer() {
                 const country = row['Country Code'];
 
                 if (portName && country && !isNaN(lat) && !isNaN(lng)) {
-                    portData.push({
-                        name: `${portName}, ${country}`,
-                        lat: lat,
-                        lng: lng
-                    });
+                    portData.push({ name: `${portName}, ${country}`, lat: lat, lng: lng });
                 }
             })
             .on('end', () => {
@@ -76,29 +69,30 @@ function initializeServer() {
     }
 }
 
-// ============================================================
-// API ENDPOINTS
-// ============================================================
 
-// --- Serve Port Data ---
 app.get('/api/ports', (req, res) => {
-    if (portData.length > 0) {
-        res.json(portData);
-    } else {
-        res.status(503).json({ error: 'Port data is not ready or failed to load.' });
-    }
+    if (portData.length > 0) res.json(portData);
+    else res.status(503).json({ error: 'Port data is not ready or failed to load.' });
 });
 
-// --- Fuel-aware Route (A* pathfinding) ---
 app.get('/api/route', (req, res) => {
     if (!landGrid) {
         return res.status(503).json({ error: 'Pathfinder is not ready yet.' });
     }
     
-    const { start, end, speed, hpReq, fuelRate, k, baseWeight, load, F, S } = req.query;
+    // UPDATED: Accept all new environmental parameters
+    const { 
+        start, end, speed, draft, hpReq, fuelRate, k, baseWeight, load, F, S,
+        rainProbability, rainIntensity, seaDepth, windStrength, windDirection,
+        currentStrength, currentDirection, waveHeight, waveDirection
+    } = req.query;
 
-    if (!start || !end || !speed || !hpReq || !fuelRate || !k || !baseWeight || !load || !F || !S) {
-        return res.status(400).json({ error: 'Missing required fuel calculation parameters.' });
+    // UPDATED: Validation check for all parameters
+    const requiredParams = { start, end, speed, draft, hpReq, fuelRate, k, baseWeight, load, F, S, rainProbability, rainIntensity, seaDepth, windStrength, windDirection, currentStrength, currentDirection, waveHeight, waveDirection };
+    for (const param in requiredParams) {
+        if (!requiredParams[param]) {
+            return res.status(400).json({ error: `Missing required parameter: ${param}.` });
+        }
     }
 
     try {
@@ -107,15 +101,16 @@ app.get('/api/route', (req, res) => {
         
         const pathfinder = new AStarPathfinder();
 
+        // UPDATED: Pass all parameters to the pathfinder
         const params = {
-            speed: parseFloat(speed),
-            hpReq: parseFloat(hpReq),
-            fuelRate: parseFloat(fuelRate),
-            k: parseFloat(k),
-            baseWeight: parseFloat(baseWeight),
-            load: parseFloat(load),
-            F: parseFloat(F),
-            S: parseFloat(S)
+            speed: parseFloat(speed), draft: parseFloat(draft), hpReq: parseFloat(hpReq),
+            fuelRate: parseFloat(fuelRate), k: parseFloat(k), baseWeight: parseFloat(baseWeight),
+            load: parseFloat(load), F: parseFloat(F), S: parseFloat(S),
+            rainProbability: parseFloat(rainProbability), rainIntensity: parseFloat(rainIntensity),
+            seaDepth: parseFloat(seaDepth), windStrength: parseFloat(windStrength),
+            windDirection: parseFloat(windDirection), currentStrength: parseFloat(currentStrength),
+            currentDirection: parseFloat(currentDirection), waveHeight: parseFloat(waveHeight),
+            waveDirection: parseFloat(waveDirection)
         };
 
         const path = pathfinder.findPath(
@@ -132,28 +127,23 @@ app.get('/api/route', (req, res) => {
     }
 });
 
-// --- Land Grid ---
+
 app.get('/api/grid', (req, res) => {
+    // ... endpoint remains the same ...
     if (!landGrid) return res.status(503).json({ error: 'Grid data is not ready.' });
-    res.json({
-        grid: landGrid.grid,
-        bounds: landGrid.bounds,
-        resolution: landGrid.resolution
-    });
+    res.json({ grid: landGrid.grid, bounds: landGrid.bounds, resolution: landGrid.resolution });
 });
 
-// --- Depth Grid (raw JSON from Python) ---
 app.get('/api/depth', (req, res) => {
+    // ... endpoint remains the same ...
     if (!depthGrid) return res.status(404).json({ error: 'Depth data not found.' });
     res.json(depthGrid);
 });
 
-// --- Save Updated Grid (land) ---
 app.post('/api/grid/update', (req, res) => {
+    // ... endpoint remains the same ...
     const newGridData = req.body;
-    if (!newGridData || !newGridData.grid) {
-        return res.status(400).json({ error: 'Invalid grid data.' });
-    }
+    if (!newGridData || !newGridData.grid) return res.status(400).json({ error: 'Invalid grid data.' });
     try {
         const timestamp = Date.now();
         const newCacheFilename = `grid-cache-${timestamp}.json`;
@@ -167,9 +157,7 @@ app.post('/api/grid/update', (req, res) => {
     }
 });
 
-// ============================================================
-// START SERVER
-// ============================================================
+
 app.listen(port, () => {
     initializeServer();
     console.log(`Pathfinding server listening at http://localhost:${port}`);

@@ -46,11 +46,11 @@ class MinHeap {
 
 class AStarPathfinder {
     /**
-     * Finds the most fuel-efficient path.
+     * Finds the most fuel-efficient path considering environmental factors.
      * @param {NavigationGrid} landGrid - The grid defining land (1) and water (0).
      * @param {object} startLatLng - The starting coordinates { lat, lng }.
      * @param {object} endLatLng - The ending coordinates { lat, lng }.
-     * @param {object} params - All the parameters for the fuel formula.
+     * @param {object} params - All vessel and environmental parameters.
      * @returns {Array<object>|null} The path with fuel info, or null.
      */
     findPath(landGrid, startLatLng, endLatLng, params) {
@@ -62,10 +62,9 @@ class AStarPathfinder {
             return null;
         }
 
-        // --- FIX: Use Set and Map for memory efficiency on large grids ---
         const openSet = new MinHeap();
         const closedSet = new Set();
-        const gScores = new Map(); // gScore is now total fuel consumed in Liters
+        const gScores = new Map(); // gScore is total fuel consumed in Liters
 
         const startKey = `${startNode.x},${startNode.y}`;
         gScores.set(startKey, 0);
@@ -86,7 +85,7 @@ class AStarPathfinder {
                     path.push({
                         ...landGrid.gridToLatLng(temp.x, temp.y),
                         onLand: landGrid.grid[temp.x][temp.y] === 1,
-                        totalFuel: temp.g // Include the final fuel consumption
+                        totalFuel: temp.g
                     });
                     temp = temp.parent;
                 }
@@ -104,17 +103,14 @@ class AStarPathfinder {
                 const isNeighborDestination = neighbor.x === endNode.x && neighbor.y === endNode.y;
                 const isCurrentNodeWater = landGrid.grid[currentNode.x][currentNode.y] === 0;
 
+                // Prevent moving from water to land unless it's the destination
                 if (isCurrentNodeWater && isNeighborLand && !isNeighborDestination) {
                     continue;
                 }
 
-                const distanceKm = this.calculateDistance(currentNode, neighbor, landGrid);
-                let fuelForSegment = this.calculateFuelPerKm(params) * distanceKm;
+                // NEW: Use the advanced cost calculation
+                const fuelForSegment = this.calculateSegmentCost(currentNode, neighbor, landGrid, params);
                 
-                if (isNeighborLand) {
-                    fuelForSegment *= 1000;
-                }
-
                 const gScore = currentNode.g + fuelForSegment;
 
                 if (!gScores.has(neighborKey) || gScore < gScores.get(neighborKey)) {
@@ -130,22 +126,72 @@ class AStarPathfinder {
         return null;
     }
     
+    // NEW: The core function for calculating fuel cost with environmental factors
+    calculateSegmentCost(fromNode, toNode, grid, params) {
+        const baseFuelPerKm = this.calculateFuelPerKm(params);
+        const distanceKm = this.calculateDistance(fromNode, toNode, grid);
+
+        let costMultiplier = 1.0;
+
+        // --- Directional Factors (Wind, Current, Waves) ---
+        const boatBearing = this.calculateBearing(fromNode, toNode, grid);
+        
+        // Wind Effect
+        const windAngleDiff = Math.abs(boatBearing - params.windDirection);
+        const windEffect = params.windStrength * Math.cos(windAngleDiff * Math.PI / 180); // Convert to radians for cos
+        
+        // Current Effect
+        const currentAngleDiff = Math.abs(boatBearing - params.currentDirection);
+        const currentEffect = params.currentStrength * Math.cos(currentAngleDiff * Math.PI / 180);
+
+        // Wave Effect
+        const waveAngleDiff = Math.abs(boatBearing - params.waveDirection);
+        const waveEffect = params.waveHeight * Math.cos(waveAngleDiff * Math.PI / 180);
+
+        // A value of 1.0 is neutral. We subtract the effect, so a tailwind (cos=1) reduces the multiplier,
+        // and a headwind (cos=-1) increases it.
+        // The coefficients (e.g., 0.1) control how much each factor affects the fuel.
+        costMultiplier -= (windEffect * 0.1); 
+        costMultiplier -= (currentEffect * 0.2); // Currents have a stronger effect
+        costMultiplier += (waveEffect * 0.15); // Waves from front/side increase cost
+
+        // --- Non-Directional Factors ---
+        // These are simple penalties. Assumes higher intensity/probability is worse.
+        costMultiplier += (params.rainIntensity * params.rainProbability * 0.05);
+
+        // Sea depth: a simple penalty for shallow water (e.g., if depth < 2 * draft)
+        // This is a simplified model; a real implementation would use a depth grid.
+        if (params.seaDepth < params.draft * 2) {
+            costMultiplier += 0.3; // 30% fuel penalty for shallow water
+        }
+
+        // Penalty for traveling over land (e.g., canals, ports)
+        if (grid.grid[toNode.x][toNode.y] === 1) {
+            costMultiplier *= 10; // Make land travel very expensive but possible
+        }
+
+        // Ensure the multiplier doesn't become negative (which would mean gaining fuel)
+        return baseFuelPerKm * distanceKm * Math.max(0.1, costMultiplier);
+    }
+    
     calculateFuelPerKm(params) {
         const { speed, hpReq, fuelRate, k, baseWeight, load, F, S } = params;
         const speedKmh = speed * 1.852;
-        if (speedKmh === 0) return Infinity;
-
+        if (speedKmh <= 0) return Infinity;
         const fuelPerKm = (((hpReq * 0.62) * fuelRate * (1 + k * (load / baseWeight)) * F * S) / speedKmh);
         return fuelPerKm;
     }
 
     heuristic(a, b, grid, params) {
+        // The heuristic should be optimistic, so it calculates the cost in a straight line
+        // with ideal conditions (no environmental resistance).
         const distanceKm = this.calculateDistance(a, b, grid);
         return this.calculateFuelPerKm(params) * distanceKm;
     }
 
     calculateDistance(a, b, grid) {
-        const R = 6371;
+        // Using Haversine formula for distance
+        const R = 6371; // Earth's radius in km
         const p1 = grid.gridToLatLng(a.x, a.y);
         const p2 = grid.gridToLatLng(b.x, b.y);
 
@@ -161,6 +207,21 @@ class AStarPathfinder {
         return R * c;
     }
 
+    calculateBearing(a, b, grid) {
+        const p1 = grid.gridToLatLng(a.x, a.y);
+        const p2 = grid.gridToLatLng(b.x, b.y);
+
+        const lat1 = p1.lat * Math.PI / 180;
+        const lng1 = p1.lng * Math.PI / 180;
+        const lat2 = p2.lat * Math.PI / 180;
+        const lng2 = p2.lng * Math.PI / 180;
+        
+        const y = Math.sin(lng2 - lng1) * Math.cos(lat2);
+        const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(lng2 - lng1);
+        let brng = Math.atan2(y, x) * 180 / Math.PI;
+        return (brng + 360) % 360; // Normalize to 0-360
+    }
+
     getNeighbors(node, grid) {
         // This function remains the same...
         const neighbors = [];
@@ -172,7 +233,8 @@ class AStarPathfinder {
                 if (i === 0 && j === 0) continue;
                 const newY = y + j;
                 if (newY < 0 || newY >= rows) continue;
-                const newX = (x + i + cols) % cols;
+                const newX = (x + i + cols) % cols; // Handles world wrapping
+                // Prevent diagonal cutting across two land cells
                 if (i !== 0 && j !== 0) {
                     const adjacentX1 = (x + i + cols) % cols;
                     const adjacentX2 = x;
