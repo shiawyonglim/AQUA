@@ -25,7 +25,7 @@ let portData = [];
 function initializeServer() {
     // ... initialization code remains the same ...
     console.log('Server starting up...');
-    const landCachePath = path.join(__dirname, 'grid-cache.json');
+    const landCachePath = path.join(__dirname, './cache/grid-cache.json');
     const depthCachePath = path.join(__dirname, 'depth-cache.json');
 
     if (fs.existsSync(landCachePath)) {
