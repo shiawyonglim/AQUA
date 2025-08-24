@@ -46,7 +46,7 @@ class MinHeap {
 
 class AStarPathfinder {
     /**
-     * Finds the most fuel-efficient path considering environmental factors.
+     * Finds the most fuel-efficient path, handling land-to-water transitions.
      * @param {NavigationGrid} landGrid - The grid defining land (1) and water (0).
      * @param {object} startLatLng - The starting coordinates { lat, lng }.
      * @param {object} endLatLng - The ending coordinates { lat, lng }.
@@ -54,14 +54,90 @@ class AStarPathfinder {
      * @returns {Array<object>|null} The path with fuel info, or null.
      */
     findPath(landGrid, startLatLng, endLatLng, params) {
-        const startNode = landGrid.latLngToGrid(startLatLng);
-        const endNode = landGrid.latLngToGrid(endLatLng);
+        const originalStartNode = landGrid.latLngToGrid(startLatLng);
+        const originalEndNode = landGrid.latLngToGrid(endLatLng);
 
-        if (startNode.x < 0 || startNode.x >= landGrid.cols || startNode.y < 0 || startNode.y >= landGrid.rows ||
-            endNode.x < 0 || endNode.x >= landGrid.cols || endNode.y < 0 || endNode.y >= landGrid.rows) {
+        if (originalStartNode.x < 0 || originalStartNode.x >= landGrid.cols || originalStartNode.y < 0 || originalStartNode.y >= landGrid.rows ||
+            originalEndNode.x < 0 || originalEndNode.x >= landGrid.cols || originalEndNode.y < 0 || originalEndNode.y >= landGrid.rows) {
+            console.error("Start or end node is out of grid bounds.");
             return null;
         }
 
+        const isStartOnLand = landGrid.grid[originalStartNode.x][originalStartNode.y] === 1;
+        const isEndOnLand = landGrid.grid[originalEndNode.x][originalEndNode.y] === 1;
+
+        let pathFromStart = [];
+        let pathToEnd = [];
+        let aStarStartNode = originalStartNode;
+        let aStarEndNode = originalEndNode;
+
+        // If starting on land, find path to nearest water
+        if (isStartOnLand) {
+            const startWaterInfo = this.findPathToNearestWater(originalStartNode, landGrid);
+            if (!startWaterInfo) {
+                console.error("Could not find a path from start to water.");
+                return null;
+            }
+            pathFromStart = startWaterInfo.path;
+            aStarStartNode = startWaterInfo.waterNode;
+        }
+
+        // If ending on land, find path from nearest water
+        if (isEndOnLand) {
+            const endWaterInfo = this.findPathToNearestWater(originalEndNode, landGrid);
+            if (!endWaterInfo) {
+                console.error("Could not find a path from destination to water.");
+                return null;
+            }
+            // This path is from land to water, so we'll reverse it later to go from water to land.
+            pathToEnd = endWaterInfo.path;
+            aStarEndNode = endWaterInfo.waterNode;
+        }
+
+        // Run the main A* algorithm between the water-accessible points
+        const waterPathResult = this.runAStar(aStarStartNode, aStarEndNode, landGrid, params);
+
+        if (!waterPathResult) {
+            console.error("A* failed to find a path between water points.");
+            return null;
+        }
+
+        // Reconstruct and format the main sea path
+        const waterPath = this.reconstructAndFormatPath(waterPathResult, landGrid, 0); // Start fuel at 0 for this segment
+
+        // Combine the paths
+        let finalPath = [];
+
+        // Add the path from the land start to the water
+        if (pathFromStart.length > 0) {
+            finalPath = finalPath.concat(pathFromStart);
+            // Avoid duplicating the connection point
+            if (waterPath.length > 0) finalPath.pop();
+        }
+
+        // Add the main water path
+        finalPath = finalPath.concat(waterPath);
+
+        // Add the path from the water to the land end
+        if (pathToEnd.length > 0) {
+            // Avoid duplicating the connection point
+            if(finalPath.length > 0) pathToEnd.shift();
+            finalPath = finalPath.concat(pathToEnd.reverse());
+        }
+        
+        // Recalculate total fuel consumption for the entire combined path
+        return this.recalculateTotalFuel(finalPath, landGrid, params);
+    }
+
+    /**
+     * The core A* algorithm for finding a path between two nodes.
+     * @param {object} startNode - The starting grid node.
+     * @param {object} endNode - The ending grid node.
+     * @param {NavigationGrid} landGrid - The grid.
+     * @param {object} params - Vessel and environmental parameters.
+     * @returns {object|null} The final node with parent references, or null.
+     */
+    runAStar(startNode, endNode, landGrid, params) {
         const openSet = new MinHeap();
         const closedSet = new Set();
         const gScores = new Map(); // gScore is total fuel consumed in Liters
@@ -79,17 +155,7 @@ class AStarPathfinder {
             if (closedSet.has(currentKey)) continue;
 
             if (currentNode.x === endNode.x && currentNode.y === endNode.y) {
-                let path = [];
-                let temp = currentNode;
-                while (temp) {
-                    path.push({
-                        ...landGrid.gridToLatLng(temp.x, temp.y),
-                        onLand: landGrid.grid[temp.x][temp.y] === 1,
-                        totalFuel: temp.g
-                    });
-                    temp = temp.parent;
-                }
-                return path.reverse();
+                return currentNode; // Return the end node to be reconstructed
             }
 
             closedSet.add(currentKey);
@@ -100,17 +166,14 @@ class AStarPathfinder {
                 if (closedSet.has(neighborKey)) continue;
 
                 const isNeighborLand = landGrid.grid[neighbor.x][neighbor.y] === 1;
+                // Allow moving onto land only if it's the final destination of this A* segment
                 const isNeighborDestination = neighbor.x === endNode.x && neighbor.y === endNode.y;
-                const isCurrentNodeWater = landGrid.grid[currentNode.x][currentNode.y] === 0;
 
-                // Prevent moving from water to land unless it's the destination
-                if (isCurrentNodeWater && isNeighborLand && !isNeighborDestination) {
+                if (isNeighborLand && !isNeighborDestination) {
                     continue;
                 }
 
-                // NEW: Use the advanced cost calculation
                 const fuelForSegment = this.calculateSegmentCost(currentNode, neighbor, landGrid, params);
-                
                 const gScore = currentNode.g + fuelForSegment;
 
                 if (!gScores.has(neighborKey) || gScore < gScores.get(neighborKey)) {
@@ -123,13 +186,104 @@ class AStarPathfinder {
                 }
             }
         }
-        return null;
+        return null; // No path found
+    }
+
+    /**
+     * Finds the shortest path from a land node to the nearest water node using BFS.
+     * @param {object} startNode - The starting land node.
+     * @param {NavigationGrid} landGrid - The grid.
+     * @returns {{path: Array<object>, waterNode: object}|null}
+     */
+    findPathToNearestWater(startNode, landGrid) {
+        const queue = [{ ...startNode, parent: null }];
+        const visited = new Set([`${startNode.x},${startNode.y}`]);
+
+        while (queue.length > 0) {
+            const currentNode = queue.shift();
+
+            // Check if the current node is water
+            if (landGrid.grid[currentNode.x][currentNode.y] === 0) {
+                // Found water, reconstruct the path back to the start
+                const path = [];
+                let temp = currentNode;
+                while (temp) {
+                    path.push({
+                        ...landGrid.gridToLatLng(temp.x, temp.y),
+                        onLand: landGrid.grid[temp.x][temp.y] === 1,
+                        totalFuel: 0 // Fuel is not calculated for this part
+                    });
+                    temp = temp.parent;
+                }
+                return { path: path.reverse(), waterNode: currentNode };
+            }
+
+            // Explore neighbors
+            const neighbors = this.getNeighbors(currentNode, landGrid);
+            for (const neighbor of neighbors) {
+                const neighborKey = `${neighbor.x},${neighbor.y}`;
+                if (!visited.has(neighborKey)) {
+                    visited.add(neighborKey);
+                    neighbor.parent = currentNode;
+                    queue.push(neighbor);
+                }
+            }
+        }
+        return null; // No path to water found
     }
     
-    // NEW: The core function for calculating fuel cost with environmental factors
+    /**
+     * Reconstructs a path from the final A* node and formats it.
+     * @param {object} endNode - The final node from the A* search.
+     * @param {NavigationGrid} landGrid - The grid.
+     * @param {number} initialFuel - The starting fuel value for this path segment.
+     * @returns {Array<object>} The formatted path.
+     */
+    reconstructAndFormatPath(endNode, landGrid, initialFuel = 0) {
+        let path = [];
+        let temp = endNode;
+        while (temp) {
+            path.push({
+                ...landGrid.gridToLatLng(temp.x, temp.y),
+                onLand: landGrid.grid[temp.x][temp.y] === 1,
+                totalFuel: initialFuel + temp.g // Add initial fuel to segment's gScore
+            });
+            temp = temp.parent;
+        }
+        return path.reverse();
+    }
+
+    /**
+     * Recalculates the total fuel consumption for the final combined path.
+     * @param {Array<object>} path - The complete path from start to end.
+     * @param {NavigationGrid} landGrid - The grid.
+     * @param {object} params - Vessel and environmental parameters.
+     * @returns {Array<object>} The path with updated totalFuel values.
+     */
+    recalculateTotalFuel(path, landGrid, params) {
+        if (path.length < 2) return path;
+
+        let cumulativeFuel = 0;
+        path[0].totalFuel = 0;
+
+        for (let i = 1; i < path.length; i++) {
+            const fromNode = landGrid.latLngToGrid(path[i - 1]);
+            const toNode = landGrid.latLngToGrid(path[i]);
+            const segmentFuel = this.calculateSegmentCost(fromNode, toNode, landGrid, params);
+            cumulativeFuel += segmentFuel;
+            path[i].totalFuel = cumulativeFuel;
+        }
+
+        return path;
+    }
+
+    // The core function for calculating fuel cost with environmental factors
     calculateSegmentCost(fromNode, toNode, grid, params) {
         const baseFuelPerKm = this.calculateFuelPerKm(params);
         const distanceKm = this.calculateDistance(fromNode, toNode, grid);
+
+        // If distance is zero, cost is zero
+        if (distanceKm === 0) return 0;
 
         let costMultiplier = 1.0;
 
@@ -138,7 +292,7 @@ class AStarPathfinder {
         
         // Wind Effect
         const windAngleDiff = Math.abs(boatBearing - params.windDirection);
-        const windEffect = params.windStrength * Math.cos(windAngleDiff * Math.PI / 180); // Convert to radians for cos
+        const windEffect = params.windStrength * Math.cos(windAngleDiff * Math.PI / 180);
         
         // Current Effect
         const currentAngleDiff = Math.abs(boatBearing - params.currentDirection);
@@ -147,22 +301,16 @@ class AStarPathfinder {
         // Wave Effect
         const waveAngleDiff = Math.abs(boatBearing - params.waveDirection);
         const waveEffect = params.waveHeight * Math.cos(waveAngleDiff * Math.PI / 180);
-
-        // A value of 1.0 is neutral. We subtract the effect, so a tailwind (cos=1) reduces the multiplier,
-        // and a headwind (cos=-1) increases it.
-        // The coefficients (e.g., 0.1) control how much each factor affects the fuel.
+        
         costMultiplier -= (windEffect * 0.1); 
-        costMultiplier -= (currentEffect * 0.2); // Currents have a stronger effect
-        costMultiplier += (waveEffect * 0.15); // Waves from front/side increase cost
+        costMultiplier -= (currentEffect * 0.2);
+        costMultiplier += (waveEffect * 0.15);
 
         // --- Non-Directional Factors ---
-        // These are simple penalties. Assumes higher intensity/probability is worse.
         costMultiplier += (params.rainIntensity * params.rainProbability * 0.05);
 
-        // Sea depth: a simple penalty for shallow water (e.g., if depth < 2 * draft)
-        // This is a simplified model; a real implementation would use a depth grid.
         if (params.seaDepth < params.draft * 2) {
-            costMultiplier += 0.3; // 30% fuel penalty for shallow water
+            costMultiplier += 0.3;
         }
 
         // Penalty for traveling over land (e.g., canals, ports)
@@ -170,7 +318,6 @@ class AStarPathfinder {
             costMultiplier *= 10; // Make land travel very expensive but possible
         }
 
-        // Ensure the multiplier doesn't become negative (which would mean gaining fuel)
         return baseFuelPerKm * distanceKm * Math.max(0.1, costMultiplier);
     }
     
@@ -183,14 +330,11 @@ class AStarPathfinder {
     }
 
     heuristic(a, b, grid, params) {
-        // The heuristic should be optimistic, so it calculates the cost in a straight line
-        // with ideal conditions (no environmental resistance).
         const distanceKm = this.calculateDistance(a, b, grid);
         return this.calculateFuelPerKm(params) * distanceKm;
     }
 
     calculateDistance(a, b, grid) {
-        // Using Haversine formula for distance
         const R = 6371; // Earth's radius in km
         const p1 = grid.gridToLatLng(a.x, a.y);
         const p2 = grid.gridToLatLng(b.x, b.y);
@@ -219,11 +363,10 @@ class AStarPathfinder {
         const y = Math.sin(lng2 - lng1) * Math.cos(lat2);
         const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(lng2 - lng1);
         let brng = Math.atan2(y, x) * 180 / Math.PI;
-        return (brng + 360) % 360; // Normalize to 0-360
+        return (brng + 360) % 360;
     }
 
     getNeighbors(node, grid) {
-        // This function remains the same...
         const neighbors = [];
         const { x, y } = node;
         const { cols, rows } = grid;
@@ -233,8 +376,7 @@ class AStarPathfinder {
                 if (i === 0 && j === 0) continue;
                 const newY = y + j;
                 if (newY < 0 || newY >= rows) continue;
-                const newX = (x + i + cols) % cols; // Handles world wrapping
-                // Prevent diagonal cutting across two land cells
+                const newX = (x + i + cols) % cols;
                 if (i !== 0 && j !== 0) {
                     const adjacentX1 = (x + i + cols) % cols;
                     const adjacentX2 = x;
