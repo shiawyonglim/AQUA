@@ -12,6 +12,7 @@ let startPoint = null;
 let endPoint = null;
 let startMarker = null;
 let endMarker = null;
+let boatAnimation = null;
 let boatAnimator = null;
 let isAnimationEnabled = false;
 let gridLayer = L.layerGroup();
@@ -71,7 +72,9 @@ function initializeTooltips(){const labels=document.querySelectorAll('.info-labe
 
 // --- NAVIGATION & ROUTING LOGIC ---
 function calculateAndFetchRoute(start, end) {
-    boatAnimator.stopAnimation();
+    if (boatAnimation) {
+        boatAnimation.stopAnimation();
+    }    
     showMessage('Calculating route...', 'blue');
     navigationState = 'CALCULATING';
     
@@ -186,7 +189,6 @@ function hideHud() {
 // --- Grid, Heatmap, and Other Functions ---
 function toggleGrid(){if(isGridVisible){map.removeLayer(gridLayer);isGridVisible=false;showMessage("Grid hidden.","blue")}else{if(gridDataCache){drawGrid();map.addLayer(gridLayer);isGridVisible=true}else{showMessage("Fetching grid data...","yellow");fetch("/api/grid").then(response=>response.json()).then(data=>{gridDataCache=data;drawGrid();map.addLayer(gridLayer);isGridVisible=true;showMessage("Grid displayed.","green")}).catch(error=>{console.error("Error fetching grid:",error);showMessage("Failed to load grid data.","red")})}}}
 function drawGrid(){if(!gridDataCache)return;gridLayer.clearLayers();const{grid,bounds,resolution}=gridDataCache;const mapBounds=map.getBounds();const iMin=Math.max(0,Math.floor((mapBounds.getWest()-bounds.west)/resolution));const iMax=Math.min(grid.length-1,Math.ceil((mapBounds.getEast()-bounds.west)/resolution));const jMin=Math.max(0,Math.floor((mapBounds.getSouth()-bounds.south)/resolution));const jMax=Math.min(grid[0].length-1,Math.ceil((mapBounds.getNorth()-bounds.south)/resolution));const landStyle={color:"rgba(239, 68, 68, 0.5)",weight:1,fillOpacity:0.2};for(let i=iMin;i<=iMax;i++){for(let j=jMin;j<=jMax;j++){if(grid[i]&&grid[i][j]===1){const west=bounds.west+i*resolution;const south=bounds.south+j*resolution;const east=west+resolution;const north=south+resolution;L.rectangle([[south,west],[north,east]],landStyle).addTo(gridLayer)}}}}
-function toggleHeatmap(){if(isHeatmapVisible){if(heatLayer)map.removeLayer(heatLayer);isHeatmapVisible=false;showMessage("Depth heatmap hidden.","blue")}else{if(depthDataCache){drawHeatmap(depthDataCache);isHeatmapVisible=true}else{showMessage("Fetching depth data...","yellow");fetch("/api/depth").then(response=>{if(!response.ok){throw new Error(`Server returned ${response.status}: ${response.statusText}`)}return response.json()}).then(data=>{depthDataCache=data;drawHeatmap(data);isHeatmapVisible=true;showMessage("Depth heatmap displayed.","green")}).catch(error=>{console.error("Error fetching depth data:",error);showMessage("Failed to load depth data.","red")})}}}
 function drawHeatmap(data){if(heatLayer)map.removeLayer(heatLayer);const{grid,bounds,resolution}=data;const heatPoints=[];let minDepth=0;for(const col of grid){if(col){for(const depth of col){if(depth<minDepth){minDepth=depth}}}}if(minDepth===0){showMessage("No depth data found in the current file to display.","yellow");return}for(let i=0;i<grid.length;i++){if(grid[i]){for(let j=0;j<grid[i].length;j++){const depth=grid[i][j];if(depth<0){const lat=bounds.south+j*resolution;const lng=bounds.west+i*resolution;const intensity=1-(depth/minDepth);heatPoints.push([lat,lng,intensity])}}}}heatLayer=L.heatLayer(heatPoints,{radius:15,blur:20,maxZoom:10,gradient:{0.4:"blue",0.65:"lime",0.8:"yellow",1.0:"red"}}).addTo(map)}
 function toggleEditMode(){editMode=!editMode;const editButton=document.getElementById("edit-grid-button");const saveButton=document.getElementById("save-grid-button");if(editMode){if(!isGridVisible)toggleGrid();showMessage("Edit Mode ON. Left-drag to draw, Right-drag to erase.","purple");L.DomUtil.addClass(map._container,"edit-cursor");editButton.classList.add("bg-blue-500");saveButton.classList.remove("hidden");map.dragging.disable()}else{showMessage("Grid Edit Mode OFF.","blue");L.DomUtil.removeClass(map._container,"edit-cursor");editButton.classList.remove("bg-blue-500");saveButton.classList.add("hidden");map.dragging.enable()}}
 function editGridCell(e){if(!gridDataCache)return;const{grid,bounds,resolution}=gridDataCache;const i=Math.floor((e.latlng.lng-bounds.west)/resolution);const j=Math.floor((e.latlng.lat-bounds.south)/resolution);if(grid[i]&&grid[i][j]!==undefined){const targetValue=drawMode==="draw"?1:0;if(grid[i][j]!==targetValue){grid[i][j]=targetValue;drawGrid()}}}
@@ -239,7 +241,6 @@ saveButtonControl.addTo(map);
 document.getElementById('save-grid-button').parentElement.classList.add('hidden');
 new CustomControl({icon:downloadIcon,title:'Download Grid',action:downloadGrid}).addTo(map);
 new CustomControl({icon:uploadIcon,title:'Upload Grid',action:uploadGrid}).addTo(map);
-new CustomControl({icon:heatIcon,title:'Toggle Depth Heatmap',action:toggleHeatmap}).addTo(map);
 new CustomControl({id:'toggle-animation-button',icon:boatIcon,title:'Toggle Boat Animation',action:toggleBoatAnimation}).addTo(map);
 const style=document.createElement('style');
 style.innerHTML=`
