@@ -10,6 +10,7 @@ const csv = require('csv-parser');
 
 const NavigationGrid = require('./navigation-grid.js');
 const AStarPathfinder = require('./a-star-pathfinder.js');
+const EnvironmentalDataCache = require('./environmental-data-cache.js');
 
 
 const app = express();
@@ -20,12 +21,12 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json({ limit: '50mb' }));
 
 let landGrid = null;
+let temporaryGrid = null; // To hold user-uploaded grids in memory
 let portData = [];
 
 function initializeServer() {
     console.log('Server starting up...');
     const landCachePath = path.join(__dirname, './cache/grid-cache.json');
-    const depthCachePath = path.join(__dirname, 'depth-cache.json');
 
     if (fs.existsSync(landCachePath)) {
         console.log('Loading land navigation grid from cache...');
@@ -66,20 +67,17 @@ app.get('/api/ports', (req, res) => {
     else res.status(503).json({ error: 'Port data is not ready or failed to load.' });
 });
 
-app.get('/api/route', (req, res) => {
-    if (!landGrid) {
+app.get('/api/route', async (req, res) => {
+    const gridToUse = temporaryGrid || landGrid; // Prioritize temporary grid if it exists
+    if (!gridToUse) {
         return res.status(503).json({ error: 'Pathfinder is not ready yet.' });
     }
     
-    // UPDATED: Accept all new environmental parameters
     const { 
-        start, end, speed, draft, hpReq, fuelRate, k, baseWeight, load, F, S,
-        rainProbability, rainIntensity, seaDepth, windStrength, windDirection,
-        currentStrength, currentDirection, waveHeight, waveDirection
+        start, end, shipLength,beam, speed, draft, hpReq, fuelRate, k, baseWeight, load, F, S, voyageDate
     } = req.query;
 
-    // UPDATED: Validation check for all parameters
-    const requiredParams = { start, end, speed, draft, hpReq, fuelRate, k, baseWeight, load, F, S, rainProbability, rainIntensity, seaDepth, windStrength, windDirection, currentStrength, currentDirection, waveHeight, waveDirection };
+    const requiredParams = { start, end, shipLength,beam,speed, draft, hpReq, fuelRate, k, baseWeight, load, F, S, voyageDate };
     for (const param in requiredParams) {
         if (!requiredParams[param]) {
             return res.status(400).json({ error: `Missing required parameter: ${param}.` });
@@ -89,37 +87,84 @@ app.get('/api/route', (req, res) => {
     try {
         const startCoords = start.split(',').map(Number);
         const endCoords = end.split(',').map(Number);
-        
-        const pathfinder = new AStarPathfinder();
-
-        // UPDATED: Pass all parameters to the pathfinder
-        const params = {
-            speed: parseFloat(speed), draft: parseFloat(draft), hpReq: parseFloat(hpReq),
-            fuelRate: parseFloat(fuelRate), k: parseFloat(k), baseWeight: parseFloat(baseWeight),
-            load: parseFloat(load), F: parseFloat(F), S: parseFloat(S),
-            rainProbability: parseFloat(rainProbability), rainIntensity: parseFloat(rainIntensity),
-            seaDepth: parseFloat(seaDepth), windStrength: parseFloat(windStrength),
-            windDirection: parseFloat(windDirection), currentStrength: parseFloat(currentStrength),
-            currentDirection: parseFloat(currentDirection), waveHeight: parseFloat(waveHeight),
-            waveDirection: parseFloat(waveDirection)
-        };
-
-        const path = pathfinder.findPath(
-            landGrid,
+        const envCache = new EnvironmentalDataCache(
             { lat: startCoords[0], lng: startCoords[1] },
             { lat: endCoords[0], lng: endCoords[1] },
-            params
+            gridToUse,
+            voyageDate
+        );
+
+        let cacheInitialized = false;
+        const maxRetries = 3;
+        const retryDelay = 2000;
+
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            console.log(`Attempt ${attempt} to fetch environmental data...`);
+            cacheInitialized = await envCache.initialize();
+            if (cacheInitialized) {
+                console.log('Successfully fetched data.');
+                break; 
+            }
+            if (attempt < maxRetries) {
+                console.log(`Failed. Retrying in ${retryDelay / 1000} seconds...`);
+                await new Promise(res => setTimeout(res, retryDelay));
+            }
+        }
+
+        if (!cacheInitialized) {
+            return res.status(500).json({ error: "Failed to initialize environmental data cache after multiple attempts. The Python server might be down or busy." });
+        }
+
+        const pathfinder = new AStarPathfinder();
+        const params = {
+            shipLength: parseFloat(shipLength), beam: parseFloat(beam),
+            speed: parseFloat(speed), draft: parseFloat(draft), hpReq: parseFloat(hpReq),
+            fuelRate: parseFloat(fuelRate), k: parseFloat(k), baseWeight: parseFloat(baseWeight),
+            load: parseFloat(load), F: parseFloat(F), S: parseFloat(S)
+        };
+            
+        const path = pathfinder.findPath(
+            gridToUse,
+            { lat: startCoords[0], lng: startCoords[1] },
+            { lat: endCoords[0], lng: endCoords[1] },
+            params,
+            envCache
         );
         
-        res.json(path || []);
+        
+
+        // --- ENRICH AND SANITIZE THE PATH ---
+        if (!path || path.length === 0) {
+            return res.json({ path: [] });
+        }
+
+        const enrichedPath = path.map(point => {
+            const envDataAtPoint = envCache.getData(point.lat, point.lng);
+            return {
+                ...point,
+                env: envDataAtPoint
+            };
+        });
+
+        // Sanitize the final path to remove any invalid coordinates
+        const sanitizedPath = enrichedPath.filter(point => 
+            Number.isFinite(point.lat) && Number.isFinite(point.lng)
+        );
+
+        if (sanitizedPath.length < enrichedPath.length) {
+            console.warn('WARNING: Invalid coordinate(s) found and removed from path.');
+        }
+
+        res.json({ path: sanitizedPath });
+
     } catch (error) {
         console.error("Error during pathfinding:", error);
         res.status(500).json({ error: "An error occurred during pathfinding." });
     }
 });
 
+
 app.get('/api/grid', (req, res) => {
-    // ... endpoint remains the same ...
     if (!landGrid) return res.status(503).json({ error: 'Grid data is not ready.' });
     res.json({ grid: landGrid.grid, bounds: landGrid.bounds, resolution: landGrid.resolution });
 });
@@ -130,7 +175,7 @@ app.post('/api/grid/update', (req, res) => {
     try {
         const timestamp = Date.now();
         const newCacheFilename = `grid-cache-${timestamp}.json`;
-        const newCachePath = path.join(__dirname, newCacheFilename);
+        const newCachePath = path.join(__dirname, 'cache', newCacheFilename);
         fs.writeFileSync(newCachePath, JSON.stringify(newGridData, null, 2));
         console.log(`New grid cache saved to: ${newCacheFilename}`);
         res.status(200).json({ message: 'New grid copy saved!', filename: newCacheFilename });
@@ -140,21 +185,21 @@ app.post('/api/grid/update', (req, res) => {
     }
 });
 
-app.get("/api/depth", async (req, res) => {
-    const startLatLng = { lat: parseFloat(req.query.startLat), lng: parseFloat(req.query.startLon) };
-    const endLatLng = { lat: parseFloat(req.query.endLat), lng: parseFloat(req.query.endLon) };
-
-    const params = {}; // add your params if needed
-
+app.post('/api/grid/temporary-upload', (req, res) => {
+    const newGridData = req.body;
+    if (!newGridData || !newGridData.grid || !newGridData.bounds) {
+        return res.status(400).json({ error: 'Invalid grid data.' });
+    }
     try {
-        const result = await pathfinder.findPath({}, startLatLng, endLatLng, params);
-        res.json({ path: result });
-    } catch (err) {
-        res.status(500).json({ error: err.toString() });
+        temporaryGrid = new NavigationGrid(newGridData);
+        console.log('Temporary grid received and loaded into memory.');
+        res.status(200).json({ message: 'Temporary grid loaded successfully.' });
+    } catch (error) {
+        console.error('Error loading temporary grid:', error);
+        temporaryGrid = null; // Clear on error
+        res.status(500).json({ error: 'Failed to process temporary grid.' });
     }
 });
-
-
 
 app.listen(port, () => {
     initializeServer();
