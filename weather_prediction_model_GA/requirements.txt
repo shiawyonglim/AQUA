@@ -1,0 +1,8 @@
+xarray
+xgboost
+pandas
+numpy
+global-land-mask
+scikit-learn
+netcdf4
+h5netcdf
