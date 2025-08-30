@@ -22,6 +22,7 @@
         .custom-control { transition: all 0.3s ease; }
         .custom-control:hover { transform: scale(1.05); box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
         .info-label { cursor: help; border-bottom: 1px dotted #9ca3af; }
+        input[type="date"]::-webkit-calendar-picker-indicator {filter: invert(1);}
         #tooltip {
             position: fixed;
             background-color: #1f2937;
@@ -84,6 +85,11 @@
             <div class="space-y-3 text-sm">
                 <!-- Vessel Specs and Environmental Factors inputs remain here -->
                  <p class="font-semibold text-gray-400">Vessel Specs</p>
+                <!--voyageDate-->
+                <div class="flex justify-between items-center">
+                    <label for="voyageDate">Voyage Start Date:</label>
+                    <input type="date" id="voyageDate" class="w-32 bg-gray-700 border-gray-600 rounded-md py-1 px-2 text-white">
+                </div>
                 <div class="flex justify-between items-center">
                     <label for="shipType" class="info-label" data-tooltip="Select a vessel type to load its typical parameters.">Ship Type</label>
                     <select id="shipType" class="w-32 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
@@ -95,6 +101,17 @@
                         <option value="cruise_ship">Cruise Ship</option>
                     </select>
                 </div>
+
+                <div class="flex justify-between items-center">
+                    <label for="shipLength" class="info-label" data-tooltip="The ship's length in meters.">Ship Length (meters)</label>
+                    <input type="number" id="shipLength" min="0" max="500000" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
+                </div>
+                <div class="flex justify-between items-center">
+                    <label for="beam" class="info-label" data-tooltip="The ship's beam in meters.">Beam (meters)</label>
+                    <input type="number" id="beam" min="0" max="500000" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
+                </div>
+
+
                 <div class="flex justify-between items-center">
                     <label for="baseWeight" class="info-label" data-tooltip="The ship's empty weight (displacement) in tons.">Base Weight (tons)</label>
                     <input type="number" id="baseWeight" min="0" max="500000" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
@@ -168,26 +185,31 @@
         
         <!-- Environmental Conditions -->
         <div id="hud-environmental-conditions" class="mt-4 pt-3 border-t border-gray-600 hidden">
-            <h3 class="font-bold mb-2 text-teal-400">Environmental Conditions</h3>
+            <h3 class="font-bold mb-2 text-teal-400">Live Environmental Conditions</h3>
             <div class="flex justify-between items-center mb-1">
                 <span class="text-gray-400">Wind:</span>
-                <span id="hud-wind" class="font-bold">1 kts @ 1°</span>
+                <span id="hud-wind" class="font-bold">--</span>
             </div>
             <div class="flex justify-between items-center mb-1">
                 <span class="text-gray-400">Current:</span>
-                <span id="hud-current" class="font-bold">1 kts @ 1°</span>
+                <span id="hud-current" class="font-bold">--</span>
             </div>
             <div class="flex justify-between items-center mb-1">
                 <span class="text-gray-400">Waves:</span>
-                <span id="hud-waves" class="font-bold">1 m @ 1°</span>
+                <span id="hud-waves" class="font-bold">--</span>
+            </div>
+            <!-- NEW HUD ELEMENTS -->
+            <div class="flex justify-between items-center mb-1">
+                <span class="text-gray-400">Sea Depth:</span>
+                <span id="hud-depth" class="font-bold">--</span>
             </div>
             <div class="flex justify-between items-center mb-1">
-                <span class="text-gray-400">Rain:</span>
-                <span id="hud-rain" class="font-bold">1 mm/h (1%)</span>
+                <span class="text-gray-400">Rainfall:</span>
+                <span id="hud-rain" class="font-bold">--</span>
             </div>
             <div class="flex justify-between items-center">
-                <span class="text-gray-400">Sea Depth:</span>
-                <span id="hud-sea-depth" class="font-bold">1 m</span>
+                <span class="text-gray-400">Ice Cover:</span>
+                <span id="hud-ice" class="font-bold">--</span>
             </div>
         </div>
     </div>
