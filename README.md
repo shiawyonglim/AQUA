@@ -1,7 +1,7 @@
 # AQUA
 maritime route optimazation
 
-unzipped the node_modules(contains the depth, land gird and also the node modules needed) and extract the contents in the root folder. 
+unzipped the node_modules(contains, land gird and also the node modules needed) and extract the contents in their respective folder. 
 
 
 
@@ -38,3 +38,4 @@ For stable performance, it is recommended to run the script on a virtual machine
 //This data is used as an input for the A* pathfinding algorithm. You can download the pre-generated folder from the link below.
 
 **[Click here to access the Project Drive](https://drive.google.com/drive/folders/1axyjNdWWTPJFyT0RH5i_vWjxACgbHBeM?usp=sharing)**
+
