@@ -323,17 +323,24 @@ class AStarPathfinder {
         //Sea Depth Effect
         costMultiplier += this.depthCostMutiplier(params, envData);
 
+        // --- Latitude Penalty (Soft Wall for Polar Regions) ---
         const currentLatLng = grid.gridToLatLng(fromNode.x, fromNode.y);
-        const southernLimit = -40.0; // Penalty starts applying south of 40°S
-        const maxPenaltyLat = -60.0; // Penalty reaches its maximum strength at 60°S
+
+        // Define the latitude limits for penalties
+        const southernLimit = -40.0;      // Penalty starts south of 40°S
+        const maxPenaltyLatSouth = -60.0; // Penalty is maxed out south of 60°S
+        const northernLimit = 75.0;       // Penalty starts north of 75°N
+        const maxPenaltyLatNorth = 85.0;  // Penalty is maxed out north of 85°N
+        const maxLatitudePenalty = 10.0;  // A very large penalty to strongly discourage these routes
 
         if (currentLatLng.lat < southernLimit) {
             // Apply a penalty that increases the further south the vessel travels.
-            // This creates a "soft wall" that the algorithm will avoid.
-            const penaltyFactor = (southernLimit - currentLatLng.lat) / (southernLimit - maxPenaltyLat);
-            const maxLatitudePenalty = 10.0; // A very large maximum penalty.
-            
-            // Math.min is used to cap the penalty in case the latitude is extremely far south.
+            const penaltyFactor = (southernLimit - currentLatLng.lat) / (southernLimit - maxPenaltyLatSouth);
+            const latitudePenalty = Math.min(penaltyFactor * maxLatitudePenalty, maxLatitudePenalty);
+            costMultiplier += latitudePenalty;
+        } else if (currentLatLng.lat > northernLimit) {
+            // Apply a penalty that increases the further north the vessel travels.
+            const penaltyFactor = (currentLatLng.lat - northernLimit) / (maxPenaltyLatNorth - northernLimit);
             const latitudePenalty = Math.min(penaltyFactor * maxLatitudePenalty, maxLatitudePenalty);
             costMultiplier += latitudePenalty;
         }
