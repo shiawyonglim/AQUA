@@ -71,7 +71,7 @@ npm install
 
 # Start the Express server
 # This will run on http://localhost:3000
-node server.js
+npm start
 
 3. Launch the Application
 Once both servers are running, open your web browser and navigate to:
@@ -101,6 +101,7 @@ Interactive "No-Go" Zones: Allowing users to draw custom zones on the map (e.g.,
 Route Comparison: Offering multiple routing strategies, such as "Fastest," "Safest (Weather Avoidance)," and "Most Fuel-Efficient," and displaying the resulting paths for comparison.
 
 **[Click here to access the Project Drive](https://drive.google.com/drive/folders/1axyjNdWWTPJFyT0RH5i_vWjxACgbHBeM?usp=sharing)**
+
 
 
 
