@@ -7,6 +7,7 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const csv = require('csv-parser');
+const fetch = require('node-fetch');
 
 const NavigationGrid = require('./navigation-grid.js');
 const AStarPathfinder = require('./a-star-pathfinder.js');
@@ -23,6 +24,14 @@ app.use(express.json({ limit: '50mb' }));
 let landGrid = null;
 let temporaryGrid = null; // To hold user-uploaded grids in memory
 let portData = [];
+const ENV_HISTORY_FILE = path.join(__dirname, 'cache', 'environmental_history.json');
+
+// Ensure cache directory exists for history log
+const cacheDir = path.join(__dirname, 'cache');
+if (!fs.existsSync(cacheDir)) {
+    fs.mkdirSync(cacheDir, { recursive: true });
+}
+
 
 function initializeServer() {
     console.log('Server starting up...');
@@ -67,8 +76,89 @@ app.get('/api/ports', (req, res) => {
     else res.status(503).json({ error: 'Port data is not ready or failed to load.' });
 });
 
+// NEW ENDPOINT: Log current environmental data point to history file
+app.post('/api/log_env_data', (req, res) => {
+    const newLogEntry = req.body;
+    
+    if (!newLogEntry || !newLogEntry.timestamp) {
+        return res.status(400).json({ error: 'Invalid log entry received.' });
+    }
+
+    try {
+        let history = [];
+        if (fs.existsSync(ENV_HISTORY_FILE)) {
+            const rawData = fs.readFileSync(ENV_HISTORY_FILE, 'utf8');
+            history = JSON.parse(rawData);
+        }
+        
+        history.push(newLogEntry);
+        fs.writeFileSync(ENV_HISTORY_FILE, JSON.stringify(history, null, 2));
+        
+        res.status(200).json({ message: 'Log appended.' });
+    } catch (error) {
+        console.error("Error logging environmental data:", error);
+        res.status(500).json({ error: 'Failed to write to history log.' });
+    }
+});
+
+// NEW ENDPOINT: Clear the history log at the start of a new animation
+app.post('/api/reset_env_log', (req, res) => {
+    try {
+        fs.writeFileSync(ENV_HISTORY_FILE, JSON.stringify([], null, 2));
+        console.log("Environmental history log reset.");
+        res.status(200).json({ message: 'History log reset.' });
+    } catch (error) {
+        console.error("Error resetting environmental data log:", error);
+        res.status(500).json({ error: 'Failed to clear history log.' });
+    }
+});
+
+// ENDPOINT: Trigger the GA Prediction in the Python data server
+app.post('/api/predict', async (req, res) => {
+    // This endpoint receives data via POST body
+    const { lat, lon, date, current_conditions } = req.body;
+
+    if (!lat || !lon || !date || !current_conditions) {
+        return res.status(400).json({ error: 'Missing required parameters: lat, lon, date, or current_conditions.' });
+    }
+
+    const PYTHON_PREDICTOR_URL = "http://127.0.0.1:8000/api/predict_next_step";
+    
+    // Construct the payload for the Python server
+    const payload = {
+        lat: parseFloat(lat),
+        lon: parseFloat(lon),
+        date: date,
+        current_conditions: current_conditions // Pass the captured HUD data
+    };
+
+    try {
+        console.log(`Requesting GA prediction from Python server at ${PYTHON_PREDICTOR_URL}...`);
+        
+        const response = await fetch(PYTHON_PREDICTOR_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            console.error("Python Prediction Error:", data.error);
+            return res.status(response.status).json({ error: data.error || 'Prediction service failed on the Python server.' });
+        }
+        
+        console.log("Prediction successful. Data written to historical_data.json.");
+        return res.json({ message: 'Prediction successful and data saved.', forecast: data });
+
+    } catch (error) {
+        console.error("Error communicating with Python prediction server:", error);
+        res.status(500).json({ error: 'Failed to connect to the prediction server. Is data_server.py running?' });
+    }
+});
+
 app.get('/api/route', async (req, res) => {
-    const gridToUse = temporaryGrid || landGrid; // Prioritize temporary grid if it exists
+    const gridToUse = temporaryGrid || landGrid;
     if (!gridToUse) {
         return res.status(503).json({ error: 'Pathfinder is not ready yet.' });
     }
@@ -123,7 +213,8 @@ app.get('/api/route', async (req, res) => {
             load: parseFloat(load), F: parseFloat(F), S: parseFloat(S)
         };
             
-        const path = pathfinder.findPath(
+        // MODIFIED: Call pathfinder to get all strategy paths
+        const allPaths = pathfinder.findPath(
             gridToUse,
             { lat: startCoords[0], lng: startCoords[1] },
             { lat: endCoords[0], lng: endCoords[1] },
@@ -131,31 +222,26 @@ app.get('/api/route', async (req, res) => {
             envCache
         );
         
-        
+        // --- ENRICH AND SANITIZE ALL PATHS ---
+        const sanitizedPaths = {};
+        for (const strategy in allPaths) {
+            const path = allPaths[strategy];
+            if (!path || path.length === 0) {
+                sanitizedPaths[strategy] = [];
+                continue;
+            }
 
-        // --- ENRICH AND SANITIZE THE PATH ---
-        if (!path || path.length === 0) {
-            return res.json({ path: [] });
+            const enrichedPath = path.map(point => {
+                const envDataAtPoint = envCache.getData(point.lat, point.lng);
+                return { ...point, env: envDataAtPoint };
+            });
+            
+            sanitizedPaths[strategy] = enrichedPath.filter(point => 
+                Number.isFinite(point.lat) && Number.isFinite(point.lng)
+            );
         }
 
-        const enrichedPath = path.map(point => {
-            const envDataAtPoint = envCache.getData(point.lat, point.lng);
-            return {
-                ...point,
-                env: envDataAtPoint
-            };
-        });
-
-        // Sanitize the final path to remove any invalid coordinates
-        const sanitizedPath = enrichedPath.filter(point => 
-            Number.isFinite(point.lat) && Number.isFinite(point.lng)
-        );
-
-        if (sanitizedPath.length < enrichedPath.length) {
-            console.warn('WARNING: Invalid coordinate(s) found and removed from path.');
-        }
-
-        res.json({ path: sanitizedPath });
+        res.json({ paths: sanitizedPaths, bounds: gridToUse.bounds, resolution: gridToUse.resolution });
 
     } catch (error) {
         console.error("Error during pathfinding:", error);

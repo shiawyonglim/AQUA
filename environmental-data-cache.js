@@ -1,9 +1,8 @@
 // ===================================================================================
-// environmental-data-cache.js (MODIFIED FOR FULL MAP)
+// environmental-data-cache.js (MODIFIED FOR BOUNDED BOX REQUESTS)
 // -----------------------------------------------------------------------------------
-// WARNING: This version has been modified to always request the entire global
-// dataset. This will be extremely slow and memory-intensive and is not
-// recommended for a production environment.
+// This version has been updated to request a smaller, more efficient "bounding box"
+// of data from the Python server instead of the entire global dataset.
 // ===================================================================================
 
 const fetch = require('node-fetch');
@@ -62,16 +61,19 @@ class EnvironmentalDataCache {
         this.FASTAPI_URL = "http://127.0.0.1:8000/get-data-grid-hybrid/";
         this.debugCounter = 0;
         this.debugLogInterval = 500;
+        
+        // --- MODIFIED: Calculate a bounding box instead of using the full map ---
+        const PADDING = 5; // Add 5 degrees of padding around the route for flexibility
         this.bounds = {
-            min_lat: -90,
-            max_lat: 90,
-            min_lon: -180,
-            max_lon: 180,
+            min_lat: Math.max(-90, Math.min(startLatLng.lat, endLatLng.lat) - PADDING),
+            max_lat: Math.min(90, Math.max(startLatLng.lat, endLatLng.lat) + PADDING),
+            min_lon: Math.max(-180, Math.min(startLatLng.lng, endLatLng.lng) - PADDING),
+            max_lon: Math.min(180, Math.max(startLatLng.lng, endLatLng.lng) + PADDING),
         };
     }
 
     async initialize() {
-        console.log(`Fetching environmental data...`);
+        console.log(`Fetching environmental data for bounding box:`, this.bounds);
         try {
             const response = await fetch(this.FASTAPI_URL, {
                 method: 'POST',
@@ -114,7 +116,7 @@ class EnvironmentalDataCache {
                 this.data[varInfo.name] = grid;
                 currentOffset += varInfo.byte_length;
             }
-            console.log(`Successfully cached FULL MAP environmental data grid (${this.data.lats.length}x${this.data.lons.length}).`);
+            console.log(`Successfully cached environmental data grid (${this.data.lats.length}x${this.data.lons.length}).`);
             return true;
         } catch (error) {
             console.error("--- ENVIRONMENTAL CACHE ERROR ---", error);

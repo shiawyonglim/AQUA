@@ -56,97 +56,82 @@ class AStarPathfinder {
      * @returns {Array<object>|null} The path with fuel info, or null.
      */
     findPath(landGrid, startLatLng, endLatLng, params, envCache) {
-        const originalStartNode = landGrid.latLngToGrid(startLatLng);
-        const originalEndNode = landGrid.latLngToGrid(endLatLng);
+        const strategies = ['balanced', 'fastest', 'safest'];
+        const allPaths = {};
 
-        if (originalStartNode.x < 0 || originalStartNode.x >= landGrid.cols || originalStartNode.y < 0 || originalStartNode.y >= landGrid.rows ||
-            originalEndNode.x < 0 || originalEndNode.x >= landGrid.cols || originalEndNode.y < 0 || originalEndNode.y >= landGrid.rows) {
-            console.error("Start or end node is out of grid bounds.");
-            return null;
-        }
+        for (const strategy of strategies) {
+            const originalStartNode = landGrid.latLngToGrid(startLatLng);
+            const originalEndNode = landGrid.latLngToGrid(endLatLng);
 
-        const isStartOnLand = landGrid.grid[originalStartNode.x][originalStartNode.y] === 1;
-        const isEndOnLand = landGrid.grid[originalEndNode.x][originalEndNode.y] === 1;
-
-        let pathFromStart = [];
-        let pathToEnd = [];
-        let aStarStartNode = originalStartNode;
-        let aStarEndNode = originalEndNode;
-
-        // If starting on land, find path to nearest water
-        if (isStartOnLand) {
-            const startWaterInfo = this.findPathToNearestWater(originalStartNode, landGrid);
-            if (!startWaterInfo) {
-                console.error("Could not find a path from start to water.");
-                return null;
+            if (originalStartNode.x < 0 || originalStartNode.x >= landGrid.cols || originalStartNode.y < 0 || originalStartNode.y >= landGrid.rows ||
+                originalEndNode.x < 0 || originalEndNode.x >= landGrid.cols || originalEndNode.y < 0 || originalEndNode.y >= landGrid.rows) {
+                console.error("Start or end node is out of grid bounds.");
+                allPaths[strategy] = []; // Return empty path for this strategy
+                continue;
             }
-            pathFromStart = startWaterInfo.path;
-            aStarStartNode = startWaterInfo.waterNode;
-        }
 
-        if (isEndOnLand) {
-            const endWaterInfo = this.findPathToNearestWater(originalEndNode, landGrid);
-            if (!endWaterInfo) {
-                console.error("Could not find a path from destination to water.");
-                return null;
+            const isStartOnLand = landGrid.grid[originalStartNode.x][originalStartNode.y] === 1;
+            const isEndOnLand = landGrid.grid[originalEndNode.x][originalEndNode.y] === 1;
+
+            let pathFromStart = [];
+            let pathToEnd = [];
+            let aStarStartNode = originalStartNode;
+            let aStarEndNode = originalEndNode;
+
+            if (isStartOnLand) {
+                const startWaterInfo = this.findPathToNearestWater(originalStartNode, landGrid);
+                if (!startWaterInfo) {
+                    allPaths[strategy] = []; continue;
+                }
+                pathFromStart = startWaterInfo.path;
+                aStarStartNode = startWaterInfo.waterNode;
             }
-            // This path is from land to water, so we'll reverse it later to go from water to land.
-            pathToEnd = endWaterInfo.path;
-            aStarEndNode = endWaterInfo.waterNode;
+
+            if (isEndOnLand) {
+                const endWaterInfo = this.findPathToNearestWater(originalEndNode, landGrid);
+                if (!endWaterInfo) {
+                    allPaths[strategy] = []; continue;
+                }
+                pathToEnd = endWaterInfo.path;
+                aStarEndNode = endWaterInfo.waterNode;
+            }
+
+            const waterPathResult = this.runAStar(aStarStartNode, aStarEndNode, landGrid, params, envCache, strategy);
+
+            if (!waterPathResult) {
+                 allPaths[strategy] = []; continue;
+            }
+            
+            const waterPath = this.reconstructAndFormatPath(waterPathResult, landGrid, 0);
+            let finalPath = [];
+            if (pathFromStart.length > 0) {
+                finalPath = finalPath.concat(pathFromStart);
+                if (waterPath.length > 0) finalPath.pop();
+            }
+            finalPath = finalPath.concat(waterPath);
+            if (pathToEnd.length > 0) {
+                if (finalPath.length > 0) pathToEnd.shift();
+                finalPath = finalPath.concat(pathToEnd.reverse());
+            }
+
+            allPaths[strategy] = this.recalculateTotalFuel(finalPath, landGrid, params, envCache, strategy);
         }
 
-        // Run the main A* algorithm between the water-accessible points
-        const waterPathResult = this.runAStar(aStarStartNode, aStarEndNode, landGrid, params, envCache);
-
-        if (!waterPathResult) {
-            console.error("A* failed to find a path between water points.");
-            return null;
-        }
-
-        // Reconstruct and format the main sea path
-        const waterPath = this.reconstructAndFormatPath(waterPathResult, landGrid, 0); // Start fuel at 0 for this segment
-
-        // Combine the paths
-        let finalPath = [];
-
-        // Add the path from the land start to the water
-        if (pathFromStart.length > 0) {
-            finalPath = finalPath.concat(pathFromStart);
-            // Avoid duplicating the connection point
-            if (waterPath.length > 0) finalPath.pop();
-        }
-
-        // Add the main water path
-        finalPath = finalPath.concat(waterPath);
-
-        // Add the path from the water to the land end
-        if (pathToEnd.length > 0) {
-            // Avoid duplicating the connection point
-            if (finalPath.length > 0) pathToEnd.shift();
-            finalPath = finalPath.concat(pathToEnd.reverse());
-        }
-
-        // Recalculate total fuel consumption for the entire combined path
-        return this.recalculateTotalFuel(finalPath, landGrid, params, envCache);
+        return allPaths;
     }
 
     /**
-     * The core A* algorithm for finding a path between two nodes.
-     * @param {object} startNode - The starting grid node.
-     * @param {object} endNode - The ending grid node.
-     * @param {NavigationGrid} landGrid - The grid.
-     * @param {object} params - Vessel and environmental parameters.
-     * @returns {object|null} The final node with parent references, or null.
+     * MODIFIED: The core A* algorithm now accepts a strategy.
      */
-    runAStar(startNode, endNode, landGrid, params, envCache) { 
+    runAStar(startNode, endNode, landGrid, params, envCache, strategy) { 
         const openSet = new MinHeap();
         const closedSet = new Set();
-        const gScores = new Map(); // gScore is total fuel consumed in Liters
+        const gScores = new Map();
 
         const startKey = `${startNode.x},${startNode.y}`;
         gScores.set(startKey, 0);
 
-        const initialHeuristic = this.heuristic(startNode, endNode, landGrid, params);
+        const initialHeuristic = this.heuristic(startNode, endNode, landGrid, params, strategy);
         openSet.push({ ...startNode, g: 0, h: initialHeuristic, f: initialHeuristic, parent: null });
 
         while (openSet.size() > 0) {
@@ -154,7 +139,7 @@ class AStarPathfinder {
             const currentKey = `${currentNode.x},${currentNode.y}`;
             if (closedSet.has(currentKey)) continue;
             if (currentNode.x === endNode.x && currentNode.y === endNode.y) {
-                return currentNode; // Return the end node to be reconstructed
+                return currentNode;
             }
 
             closedSet.add(currentKey);
@@ -165,27 +150,24 @@ class AStarPathfinder {
                 if (closedSet.has(neighborKey)) continue;
 
                 const isNeighborLand = landGrid.grid[neighbor.x][neighbor.y] === 1;
-                // Allow moving onto land only if it's the final destination of this A* segment
                 const isNeighborDestination = neighbor.x === endNode.x && neighbor.y === endNode.y;
+                if (isNeighborLand && !isNeighborDestination) continue;
 
-                if (isNeighborLand && !isNeighborDestination) {
-                    continue;
-                }
-
-                const fuelForSegment = this.calculateSegmentCost(currentNode, neighbor, landGrid, params, envCache);
+                // MODIFIED: Pass strategy to cost calculation
+                const fuelForSegment = this.calculateSegmentCost(currentNode, neighbor, landGrid, params, envCache, strategy);
                 const gScore = currentNode.g + fuelForSegment;
 
                 if (!gScores.has(neighborKey) || gScore < gScores.get(neighborKey)) {
                     gScores.set(neighborKey, gScore);
                     neighbor.parent = currentNode;
                     neighbor.g = gScore;
-                    neighbor.h = this.heuristic(neighbor, endNode, landGrid, params);
+                    neighbor.h = this.heuristic(neighbor, endNode, landGrid, params, strategy);
                     neighbor.f = neighbor.g + neighbor.h;
                     openSet.push(neighbor);
                 }
             }
         }
-        return null; // No path found
+        return null;
     }
 
     /**
@@ -260,98 +242,74 @@ class AStarPathfinder {
      * @param {object} params - Vessel and environmental parameters.
      * @returns {Array<object>} The path with updated totalFuel values.
      */
-    recalculateTotalFuel(path, landGrid, params, envCache) {
+    recalculateTotalFuel(path, landGrid, params, envCache, strategy) {
         if (path.length < 2) return path;
-
         let cumulativeFuel = 0;
         path[0].totalFuel = 0;
-
         for (let i = 1; i < path.length; i++) {
             const fromNode = landGrid.latLngToGrid(path[i - 1]);
             const toNode = landGrid.latLngToGrid(path[i]);
-            const segmentFuel = this.calculateSegmentCost(fromNode, toNode, landGrid, params, envCache);
+            const segmentFuel = this.calculateSegmentCost(fromNode, toNode, landGrid, params, envCache, strategy);
             cumulativeFuel += segmentFuel;
             path[i].totalFuel = cumulativeFuel;
         }
-
         return path;
     }
 
 
     // The core function for calculating fuel cost with environmental factors
-    calculateSegmentCost(fromNode, toNode, grid, params, envCache) {
+    calculateSegmentCost(fromNode, toNode, grid, params, envCache, strategy = 'balanced') {
         const baseFuelPerKm = this.calculateFuelPerKm(params);
         const distanceKm = this.calculateDistance(fromNode, toNode, grid);
-
         if (distanceKm === 0) return 0;
+        
+        // --- Strategy-based multiplier weights ---
+        let weatherPenaltyWeight = 1.0;
+        let fuelWeight = 1.0;
 
-        //Get the environmental data for the current node
+        if (strategy === 'fastest') {
+            // For the fastest route, minimize the impact of weather penalties
+            weatherPenaltyWeight = 0.2; 
+        } else if (strategy === 'safest') {
+            // For the safest route, amplify the impact of weather penalties
+            weatherPenaltyWeight = 5.0; 
+        }
+
         const { lat, lng } = grid.gridToLatLng(fromNode.x, fromNode.y);
         const envData = envCache.getData(lat, lng);
 
-        // If sea_depth is unknown, use a default high cost
         if (envData.depth === null) {
-            return baseFuelPerKm * distanceKm * 5; // Penalty for unknown areas
+            return baseFuelPerKm * distanceKm * 5;
         }
 
         let costMultiplier = 1.0;
         const boatBearing = this.calculateBearing(fromNode, toNode, grid);
+        const P_req_kW = params.hpReq * 0.745699872;
+        const SFOC = (params.fuelRate * 0.86) / 0.745699872;
 
-        const P_req_kW = params.hpReq * 0.745699872; // （propulsion power requirement），1 hp = 0.745699872 kW
-        const SFOC = (params.fuelRate * 0.86) / 0.745699872;   // fuelRate (L/hp-hr) → SFOC (kg/kWh) //fuelDensity 0.86 kg/L for marine diesel
+        costMultiplier += weatherPenaltyWeight * this.windCostMultiplier(boatBearing, baseFuelPerKm, SFOC, params, envData);
+        costMultiplier += weatherPenaltyWeight * this.currentCostMutiplier(boatBearing, params, envData);
+        costMultiplier += weatherPenaltyWeight * this.waveCostMutiplier(boatBearing, params, envData);
+        costMultiplier += weatherPenaltyWeight * this.rainCostMutiplier(params, envData);
+        costMultiplier += weatherPenaltyWeight * this.iceCostMutiplier(params, envData);
+        costMultiplier += this.depthCostMutiplier(params, envData); // Depth is always a critical safety factor
 
-
-        // 2. Use the live data from envData 
-
-        // Wind Effect (convert cardinal 0-7 to degrees 0-360)
-        costMultiplier += this.windCostMultiplier(boatBearing, baseFuelPerKm, SFOC, params, envData);
-
-        // Current Effect
-        costMultiplier += this.currentCostMutiplier(boatBearing, params, envData);
-
-        // Wave Effect
-        costMultiplier += this.waveCostMutiplier(boatBearing, params, envData);
-
-
-        // Rain Effect 
-        costMultiplier += this.rainCostMutiplier(params, envData);
-
-        // Ice Effect
-        costMultiplier += this.iceCostMutiplier(params, envData);
-
-
-        //Sea Depth Effect
-        costMultiplier += this.depthCostMutiplier(params, envData);
-
-        // --- Latitude Penalty (Soft Wall for Polar Regions) ---
         const currentLatLng = grid.gridToLatLng(fromNode.x, fromNode.y);
-
-        // Define the latitude limits for penalties
-        const southernLimit = -40.0;      // Penalty starts south of 40°S
-        const maxPenaltyLatSouth = -60.0; // Penalty is maxed out south of 60°S
-        const northernLimit = 75.0;       // Penalty starts north of 75°N
-        const maxPenaltyLatNorth = 85.0;  // Penalty is maxed out north of 85°N
-        const maxLatitudePenalty = 10.0;  // A very large penalty to strongly discourage these routes
-
+        const southernLimit = -40.0, maxPenaltyLatSouth = -60.0;
+        const northernLimit = 75.0, maxPenaltyLatNorth = 85.0;
+        const maxLatitudePenalty = 10.0;
         if (currentLatLng.lat < southernLimit) {
-            // Apply a penalty that increases the further south the vessel travels.
             const penaltyFactor = (southernLimit - currentLatLng.lat) / (southernLimit - maxPenaltyLatSouth);
-            const latitudePenalty = Math.min(penaltyFactor * maxLatitudePenalty, maxLatitudePenalty);
-            costMultiplier += latitudePenalty;
+            costMultiplier += Math.min(penaltyFactor * maxLatitudePenalty, maxLatitudePenalty);
         } else if (currentLatLng.lat > northernLimit) {
-            // Apply a penalty that increases the further north the vessel travels.
             const penaltyFactor = (currentLatLng.lat - northernLimit) / (maxPenaltyLatNorth - northernLimit);
-            const latitudePenalty = Math.min(penaltyFactor * maxLatitudePenalty, maxLatitudePenalty);
-            costMultiplier += latitudePenalty;
+            costMultiplier += Math.min(penaltyFactor * maxLatitudePenalty, maxLatitudePenalty);
         }
-
-        // --- Land Effect (if moving onto land, apply a very high cost)
         if (grid.grid[toNode.x][toNode.y] === 1) {
             costMultiplier *= 10;
         }
 
-
-        const finalCost = baseFuelPerKm * distanceKm * Math.max(0.1, costMultiplier);
+        const finalCost = baseFuelPerKm * distanceKm * fuelWeight * Math.max(0.1, costMultiplier);
         return finalCost;
     }
 
@@ -365,9 +323,15 @@ class AStarPathfinder {
         return fuelPerKm;
     }
 
-    heuristic(a, b, grid, params,) {
+    heuristic(a, b, grid, params, strategy) {
         const distanceKm = this.calculateDistance(a, b, grid);
-        return this.calculateFuelPerKm(params) * distanceKm;
+        let baseCost = this.calculateFuelPerKm(params) * distanceKm;
+
+        // For the fastest route, the heuristic should favor pure distance.
+        if (strategy === 'fastest') {
+            baseCost = distanceKm;
+        }
+        return baseCost;
     }
 
     calculateDistance(a, b, grid) {
