@@ -3,12 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Maritime Sea Navigation</title>
+    <title>AQUA | AI-Powered Maritime Navigation</title>
     
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-    crossorigin=""/>
-    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
+
     <script src="https://cdn.tailwindcss.com"></script>
     
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -23,92 +22,55 @@
         .custom-control:hover { transform: scale(1.05); box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
         .info-label { cursor: help; border-bottom: 1px dotted #9ca3af; }
         input[type="date"]::-webkit-calendar-picker-indicator {filter: invert(1);}
-        #tooltip {
-            position: fixed;
-            background-color: #1f2937;
-            color: #d1d5db;
-            padding: 10px;
-            border-radius: 6px;
-            border: 1px solid #4b5563;
-            font-size: 0.8rem;
-            max-width: 250px;
-            z-index: 2000;
-            pointer-events: none;
-            opacity: 0;
-            transition: opacity 0.2s;
-        }
-        .port-search-input, .strategy-select {
-            width: 100%;
-            background-color: #374151;
-            border: 1px solid #4b5563;
-            color: #e2e8f0;
-            border-radius: 0.375rem;
-            padding: 0.5rem 0.75rem;
-            font-size: 0.875rem;
-        }
-        .port-search-input:focus, .strategy-select:focus {
-            outline: none;
-            border-color: #3b82f6;
-            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5);
-        }
-        .sidebar, .navigation-hud, .turn-by-turn-panel, .anchoring-panel {
-            z-index: 1000;
-        }
+        #tooltip { position: fixed; background-color: #1f2937; color: #d1d5db; padding: 10px; border-radius: 6px; border: 1px solid #4b5563; font-size: 0.8rem; max-width: 250px; z-index: 2000; pointer-events: none; opacity: 0; transition: opacity 0.2s; }
+        .port-search-input { width: 100%; background-color: #374151; border: 1px solid #4b5563; color: #e2e8f0; border-radius: 0.375rem; padding: 0.5rem 0.75rem; font-size: 0.875rem; }
+        .port-search-input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5); }
+        .sidebar, .navigation-hud, .turn-by-turn-panel { z-index: 1000; }
+        /* Styling for Leaflet.draw controls */
+        .leaflet-draw-toolbar a { background-color: #374151 !important; border-color: #4b5563 !important; color: white !important; }
+        .leaflet-draw-toolbar a:hover { background-color: #4b5563 !important; }
     </style>
 </head>
 <body class="bg-gray-900 text-white">
 
     <div id="map"></div>
     
-    <div id="loading-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-75 flex flex-col items-center justify-center z-[2000] hidden">
-        <div class="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-blue-500"></div>
-        <p class="text-white text-xl mt-4">Calculating Optimal Route...</p>
+    <div id="loading-overlay" class="hidden fixed inset-0 bg-gray-900 bg-opacity-70 flex items-center justify-center z-[2000]">
+        <div class="text-center">
+            <div class="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+            <p class="mt-4 text-lg font-semibold">Calculating Optimal Routes...</p>
+        </div>
     </div>
-
+    
     <div id="messageBox" class="fixed top-5 left-1/2 -translate-x-1/2 bg-blue-600 text-white py-3 px-6 rounded-lg shadow-lg z-[1000] text-center transition-opacity duration-300 opacity-0">
         Select a starting point.
     </div>
 
-    <!-- LEFT SIDEBAR -->
-    <div class="sidebar fixed top-5 left-5 bg-gray-800 bg-opacity-80 backdrop-blur-sm p-4 rounded-lg shadow-lg text-white w-72 max-h-[calc(100vh-40px)] overflow-y-auto">
-        
+    <div class="sidebar fixed top-5 left-5 bg-gray-800 bg-opacity-80 backdrop-blur-sm p-4 rounded-lg shadow-lg text-white w-80 max-h-[calc(100vh-40px)] overflow-y-auto">
         <div class="route-planner-panel space-y-3">
             <h2 class="text-lg font-bold mb-2 border-b border-gray-600 pb-2">Route Planner</h2>
+             <button id="demo-route-button" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg transition-colors custom-control">Load Demo Route</button>
             <div>
                 <label for="startPort" class="block text-sm font-medium text-gray-300 mb-1">Start Port</label>
-                <input type="text" id="startPort" list="ports-list" class="port-search-input" placeholder="Search for starting port...">
+                <input type="text" id="startPort" list="ports-list" class="port-search-input" placeholder="Search or double-click on map...">
             </div>
             <div>
                 <label for="endPort" class="block text-sm font-medium text-gray-300 mb-1">End Port</label>
-                <input type="text" id="endPort" list="ports-list" class="port-search-input" placeholder="Search for destination port...">
+                <input type="text" id="endPort" list="ports-list" class="port-search-input" placeholder="Search or double-click on map...">
             </div>
             <datalist id="ports-list"></datalist>
-            
-            <div>
-                <label for="routingStrategy" class="block text-sm font-medium text-gray-300 mb-1">Routing Strategy</label>
-                <select id="routingStrategy" class="strategy-select">
-                    <option value="balanced" selected>Balanced (Fuel-Efficient)</option>
-                    <option value="fastest">Fastest</option>
-                    <option value="safest">Safest (Weather Avoidance)</option>
-                </select>
-            </div>
-
-            <button id="demo-route-button" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md transition duration-300">
-                Load Demo Route
-            </button>
         </div>
 
         <div class="vessel-panel mt-6">
             <h2 class="text-lg font-bold mb-3 border-b border-gray-600 pb-2">Vessel & Environment</h2>
             <div class="space-y-3 text-sm">
-                 <p class="font-semibold text-gray-400">Vessel Specs</p>
                 <div class="flex justify-between items-center">
                     <label for="voyageDate">Voyage Start Date:</label>
-                    <input type="date" id="voyageDate" class="w-32 bg-gray-700 border-gray-600 rounded-md py-1 px-2 text-white">
+                    <input type="date" id="voyageDate" class="w-36 bg-gray-700 border-gray-600 rounded-md py-1 px-2 text-white">
                 </div>
                 <div class="flex justify-between items-center">
                     <label for="shipType" class="info-label" data-tooltip="Select a vessel type to load its typical parameters.">Ship Type</label>
-                    <select id="shipType" class="w-32 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
+                    <select id="shipType" class="w-36 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
                         <option value="fishing_trawler">Fishing Trawler</option>
                         <option value="handysize_bulk">Handysize Bulk Carrier</option>
                         <option value="panamax_container">Panamax Container Ship</option>
@@ -118,77 +80,64 @@
                     </select>
                 </div>
                 <div class="flex justify-between items-center">
-                    <label for="shipLength" class="info-label" data-tooltip="The ship's length in meters.">Ship Length (meters)</label>
-                    <input type="number" id="shipLength" min="0" max="500000" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
+                    <label for="shipLength" class="info-label" data-tooltip="The ship's length in meters.">Ship Length (m)</label>
+                    <input type="number" id="shipLength" min="0" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
                 </div>
                 <div class="flex justify-between items-center">
-                    <label for="beam" class="info-label" data-tooltip="The ship's beam in meters.">Beam (meters)</label>
-                    <input type="number" id="beam" min="0" max="500000" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
+                    <label for="beam" class="info-label" data-tooltip="The ship's beam in meters.">Beam (m)</label>
+                    <input type="number" id="beam" min="0" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
                 </div>
                 <div class="flex justify-between items-center">
-                    <label for="baseWeight" class="info-label" data-tooltip="The ship's empty weight (displacement) in tons.">Base Weight (tons)</label>
-                    <input type="number" id="baseWeight" min="0" max="500000" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
+                    <label for="baseWeight" class="info-label" data-tooltip="The ship's empty weight (displacement) in tons.">Base Weight (t)</label>
+                    <input type="number" id="baseWeight" min="0" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
                 </div>
                 <div class="flex justify-between items-center">
-                    <label for="load" class="info-label" data-tooltip="The weight of cargo, fuel, and supplies in tons.">Cargo Load (tons)</label>
-                    <input type="number" id="load" min="0" max="600000" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
+                    <label for="load" class="info-label" data-tooltip="The weight of cargo, fuel, and supplies in tons.">Cargo Load (t)</label>
+                    <input type="number" id="load" min="0" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
                 </div>
                 <div class="flex justify-between items-center">
-                    <label for="shipSpeed" class="info-label" data-tooltip="The vessel's target cruising speed in knots.">Target Speed (knots)</label>
+                    <label for="shipSpeed" class="info-label" data-tooltip="The vessel's target cruising speed in knots.">Target Speed (kts)</label>
                     <input type="number" id="shipSpeed" min="1" max="40" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
                 </div>
                 <div class="flex justify-between items-center">
-                    <label for="shipDraft" class="info-label" data-tooltip="The vertical distance between the waterline and the bottom of the hull (keel) in meters. Deeper draft requires deeper water.">Draft (meters)</label>
+                    <label for="shipDraft" class="info-label" data-tooltip="Vertical distance from waterline to keel in meters.">Draft (m)</label>
                     <input type="number" id="shipDraft" min="1" max="30" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
                 </div>
-                <p class="font-semibold text-gray-400 pt-2">Engine Efficiency</p>
+                 <p class="font-semibold text-gray-400 pt-2">Engine Efficiency</p>
                 <div class="flex justify-between items-center">
                     <label for="hpReq" class="info-label" data-tooltip="The typical horsepower required for cruising speed.">HP Required</label>
                     <input type="number" id="hpReq" min="1" max="150000" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
                 </div>
                 <div class="flex justify-between items-center">
-                    <label for="fuelRate" class="info-label" data-tooltip="Specific Fuel Consumption (SFC). Liters of fuel consumed per horsepower per hour. Typically 0.18-0.22 for large marine diesels.">Fuel Rate (L/hp-hr)</label>
+                    <label for="fuelRate" class="info-label" data-tooltip="Liters of fuel consumed per horsepower per hour.">Fuel Rate (L/hp-hr)</label>
                     <input type="number" id="fuelRate" min="0.1" max="0.3" step="0.01" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
                 </div>
+            </div>
 
-                <p class="font-semibold text-gray-400 pt-2">Environmental Factors</p>
-                <div class="flex justify-between items-center">
-                    <label for="hullFactor" class="info-label" data-tooltip="Represents how efficiently the hull handles added weight. Lower is better. Typically 0.3-0.7.">Hull Load Factor (k)</label>
-                    <input type="number" id="hullFactor" min="0.2" max="1.0" step="0.1" value="0.3" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
+            <div id="metrics-display" class="mt-4 pt-3 border-t border-gray-600 text-sm hidden">
+                <div class="flex justify-between items-center mb-2">
+                    <label for="routingStrategy" class="font-bold text-gray-300">Selected Route:</label>
+                    <select id="routingStrategy" class="w-36 bg-gray-700 border-gray-600 rounded-md py-1 px-2 text-white">
+                        <option value="balanced">Balanced</option>
+                        <option value="fastest">Fastest</option>
+                        <option value="safest">Safest</option>
+                    </select>
                 </div>
-                <div class="flex justify-between items-center">
-                    <label for="foulingFactor" class="info-label" data-tooltip="Represents drag from marine growth on the hull. A new ship is 1.0. A ship after 1 year could be 1.1-1.3.">Fouling Factor (F)</label>
-                    <input type="number" id="foulingFactor" min="1.0" max="1.5" step="0.1" value="1.2" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
-                </div>
-                <div class="flex justify-between items-center">
-                    <label for="seaStateFactor" class="info-label" data-tooltip="Represents drag from waves and weather. Calm seas = 1.0. Moderate = 1.2-1.5. Heavy = 1.5+.">Sea State (S)</label>
-                    <input type="number" id="seaStateFactor" min="1.0" max="2.0" step="0.1" value="1.3" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
+                <div id="metrics-details" class="space-y-1"></div>
+                 <div class="mt-3 grid grid-cols-2 gap-2">
+                    <button id="profile-route-button" class="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-3 rounded-lg transition-colors custom-control hidden text-xs">View Profile</button>
+                    <button id="compare-routes-button" class="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-2 px-3 rounded-lg transition-colors custom-control hidden text-xs">Compare All</button>
                 </div>
             </div>
-            
-            <div id="metrics-display" class="mt-4 pt-3 border-t border-gray-600 text-sm hidden"></div>
         </div>
     </div>
 
-    <!-- TURN-BY-TURN PANEL -->
     <div id="turn-by-turn-panel" class="turn-by-turn-panel fixed top-5 left-1/2 -translate-x-1/2 bg-gray-800 bg-opacity-80 backdrop-blur-sm px-6 py-3 rounded-lg shadow-lg text-white text-center hidden">
         <p class="text-lg font-bold" id="turn-instruction">Maintain Course</p>
         <p class="text-sm text-gray-300" id="turn-distance">Next turn in 100 km</p>
     </div>
 
-    <!-- NEW: ANCHORING PANEL -->
-    <div id="anchoring-panel" class="anchoring-panel fixed top-5 left-1/2 -translate-x-1/2 bg-red-800 bg-opacity-90 backdrop-blur-sm px-6 py-4 rounded-lg shadow-lg text-white text-center w-96 hidden">
-        <h3 class="text-lg font-bold mb-2">Voyage Paused - Anchoring</h3>
-        <p class="text-sm text-red-200 mb-3" id="anchoring-reason">Dangerous weather conditions predicted ahead.</p>
-        <button id="proceed-risk-button" class="bg-yellow-500 hover:bg-yellow-600 text-black font-bold py-2 px-4 rounded-md transition duration-300">
-            Proceed at Risk
-        </button>
-    </div>
-
-
-    <!-- TOP-RIGHT NAVIGATION HUD -->
     <div id="navigation-hud" class="navigation-hud fixed top-5 right-5 bg-gray-800 bg-opacity-80 backdrop-blur-sm p-4 rounded-lg shadow-lg text-white w-72 text-sm hidden">
-        <!-- Animation Progress -->
         <div id="hud-animation-progress" class="hidden">
             <h3 class="font-bold mb-2 text-base text-blue-400">Animation Progress</h3>
             <div class="flex justify-between items-center mb-1 text-xs">
@@ -205,7 +154,6 @@
             </div>
         </div>
         
-        <!-- Environmental Conditions -->
         <div id="hud-environmental-conditions" class="mt-3 pt-3 border-t border-gray-600 hidden">
             <h3 class="font-bold mb-2 text-base text-teal-400">Live Environmental Conditions</h3>
             <div class="flex justify-between items-center mb-1 text-xs">
@@ -234,7 +182,6 @@
             </div>
         </div>
 
-        <!-- Prediction Forecast -->
         <div id="hud-prediction-forecast" class="mt-3 pt-3 border-t border-gray-600 hidden">
             <h3 class="font-bold mb-2 text-base text-red-400">Next 6hr Prediction (GA)</h3>
             <div id="prediction-status" class="text-xs text-gray-400 mb-2">Ready</div>
@@ -249,15 +196,35 @@
         </div>
     </div>
 
+    <div id="comparison-modal" class="hidden fixed inset-0 bg-gray-900 bg-opacity-80 flex items-center justify-center z-[2000]">
+        <div class="bg-gray-800 rounded-lg shadow-2xl p-6 w-full max-w-4xl text-white relative">
+            <button id="close-comparison-modal-button" class="absolute top-3 right-3 text-gray-400 hover:text-white text-3xl font-bold">&times;</button>
+            <h2 class="text-2xl font-bold mb-4 border-b border-gray-600 pb-2">Voyage Strategy Comparison</h2>
+            <div class="p-4 bg-gray-700 rounded-lg h-[60vh]">
+                <canvas id="comparison-chart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div id="profile-modal" class="hidden fixed inset-0 bg-gray-900 bg-opacity-80 flex items-center justify-center z-[2000]">
+        <div class="bg-gray-800 rounded-lg shadow-2xl p-6 w-full max-w-4xl text-white relative">
+            <button id="close-profile-modal-button" class="absolute top-3 right-3 text-gray-400 hover:text-white text-3xl font-bold">&times;</button>
+            <h2 class="text-2xl font-bold mb-4 border-b border-gray-600 pb-2">Environmental Route Profile</h2>
+            <div class="p-4 bg-gray-700 rounded-lg h-[60vh]">
+                <canvas id="profile-chart"></canvas>
+            </div>
+        </div>
+    </div>
+
     <div id="tooltip" class="hidden"></div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-    <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
     <script src='https://unpkg.com/@turf/turf@6/turf.min.js'></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
     <script src="boat.js"></script>
     <script src="main.js"></script>
 
 </body>
 </html>
-

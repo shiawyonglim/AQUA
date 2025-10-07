@@ -12,6 +12,14 @@ let gaPredictionTimer = null;
 let currentGridInfo = null;
 const GA_PREDICTION_INTERVAL_MS = 10000;
 
+
+let noGoZones = []; // To store user-drawn zones
+let drawControl; // To hold the Leaflet.draw control instance
+let drawnItems; // Feature group for drawn items
+let comparisonChart = null; // To hold the Chart.js instance
+let profileChart = null; // NEW: To hold the profile chart instance
+
+
 // --- STATE MANAGEMENT ---
 let navigationState = 'SET_START';
 let startPoint = null;
@@ -91,6 +99,10 @@ function initializeApp() {
     document.getElementById('demo-route-button').addEventListener('click', setDemoRoute);
     document.getElementById('routingStrategy').addEventListener('change', updateMetricsForSelectedStrategy);
     document.getElementById('shipType').addEventListener('change', updateShipParameters);
+    
+    // MODIFIED: Dummy values for now, these aren't used in the provided code
+    document.body.insertAdjacentHTML('beforeend', '<input type="hidden" id="hullFactor" value="0.005"><input type="hidden" id="foulingFactor" value="1.0"><input type="hidden" id="seaStateFactor" value="1.0">');
+
 
     // RESTORED: Grid editing event listeners
     map.on('moveend zoomend', () => { if (isGridVisible) drawGrid(); });
@@ -100,6 +112,54 @@ function initializeApp() {
     map.on('contextmenu', (e) => { if (editMode) L.DomEvent.preventDefault(e); });
     document.addEventListener('keydown', (e) => { if (e.code === 'Space' && editMode) { map.dragging.enable(); L.DomUtil.addClass(map._container, 'pan-cursor'); } });
     document.addEventListener('keyup', (e) => { if (e.code === 'Space' && editMode) { map.dragging.disable(); L.DomUtil.removeClass(map._container, 'pan-cursor'); } });
+
+
+    // --- MODIFIED: Initialize Leaflet.draw for No-Go Zones ---
+    drawnItems = new L.FeatureGroup();
+    map.addLayer(drawnItems);
+
+    drawControl = new L.Control.Draw({
+        position: 'bottomright', // MODIFIED: Moved the control to the bottom right
+        edit: {
+            featureGroup: drawnItems,
+            remove: true
+        },
+        draw: {
+            polygon: { shapeOptions: { color: '#f06eaa', weight: 2, fillOpacity: 0.3 } },
+            rectangle: { shapeOptions: { color: '#f06eaa', weight: 2, fillOpacity: 0.3 } },
+            polyline: false, circle: false, marker: false, circlemarker: false,
+        },
+    });
+    map.addControl(drawControl);
+
+    map.on(L.Draw.Event.CREATED, function (event) {
+        const layer = event.layer;
+        drawnItems.addLayer(layer);
+        noGoZones.push(layer.toGeoJSON());
+        showMessage('No-Go zone added. It will be applied on the next route calculation.', 'purple');
+    });
+
+    map.on(L.Draw.Event.EDITED, function (event) {
+        noGoZones = [];
+        drawnItems.eachLayer(layer => {
+            noGoZones.push(layer.toGeoJSON());
+        });
+        showMessage('No-Go zones updated.', 'purple');
+    });
+
+    map.on(L.Draw.Event.DELETED, function (event) {
+        noGoZones = [];
+        drawnItems.eachLayer(layer => {
+            noGoZones.push(layer.toGeoJSON());
+        });
+        showMessage('No-Go zones removed.', 'purple');
+    });
+    
+    // MODIFIED: Event listeners for modals
+    document.getElementById('compare-routes-button').addEventListener('click', showComparisonModal);
+    document.getElementById('close-comparison-modal-button').addEventListener('click', hideComparisonModal);
+    document.getElementById('profile-route-button').addEventListener('click', showProfileModal);
+    document.getElementById('close-profile-modal-button').addEventListener('click', hideProfileModal);
 
 
     // --- Other Initializations ---
@@ -143,29 +203,32 @@ function calculateAndFetchRoute(start, end) {
     showLoadingIndicator();
     navigationState = 'CALCULATING';
 
-    const paramsForServer = {
+    const payload = {
+        start: { lat: start.lat, lng: start.lng },
+        end: { lat: end.lat, lng: end.lng },
         shipLength: document.getElementById('shipLength').value, beam: document.getElementById('beam').value,
         speed: document.getElementById('shipSpeed').value, draft: document.getElementById('shipDraft').value,
         hpReq: document.getElementById('hpReq').value, fuelRate: document.getElementById('fuelRate').value,
         k: document.getElementById('hullFactor').value, baseWeight: document.getElementById('baseWeight').value,
         load: document.getElementById('load').value, F: document.getElementById('foulingFactor').value,
         S: document.getElementById('seaStateFactor').value,
-        voyageDate: document.getElementById('voyageDate').value
+        voyageDate: document.getElementById('voyageDate').value,
+        noGoZones: noGoZones // NEW: Send the no-go zones
     };
 
-    if (!paramsForServer.voyageDate) {
+    if (!payload.voyageDate) {
         hideLoadingIndicator();
         showMessage(`Error: Voyage Start Date is missing.`, 'red');
         navigationState = 'SET_END';
         return;
     }
 
-    const startCoords = `${start.lat},${start.lng}`;
-    const endCoords = `${end.lat},${end.lng}`;
-    const vesselQuery = Object.entries(paramsForServer).map(([key, value]) => `${key}=${value}`).join('&');
-    const queryString = `start=${startCoords}&end=${endCoords}&${vesselQuery}`;
-
-    fetch(`/api/route?${queryString}`)
+    // MODIFIED: Use POST request to send the payload
+    fetch(`/api/route`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    })
         .then(response => {
             if (!response.ok) throw new Error(`Server error: ${response.statusText}`);
             return response.json();
@@ -179,11 +242,17 @@ function calculateAndFetchRoute(start, end) {
             if (data.bounds && data.resolution) {
                 currentGridInfo = { bounds: data.bounds, resolution: data.resolution };
             }
-            if (Object.values(allCalculatedPaths).some(p => p.length > 0)) {
+            if (Object.values(allCalculatedPaths).some(p => p && p.length > 0)) {
                 drawAllPathsAndTooltips();
+                // MODIFIED: Show action buttons
+                document.getElementById('compare-routes-button').classList.remove('hidden');
+                document.getElementById('profile-route-button').classList.remove('hidden');
+                
+                // Select the 'balanced' route by default
+                document.getElementById('routingStrategy').value = 'balanced';
                 updateMetricsForSelectedStrategy();
                 navigationState = 'ROUTE_DISPLAYED';
-                showMessage('Routes found. Click a route to select it.', 'green');
+                showMessage('Routes found. Click a route to select it or compare all.', 'green');
             } else {
                 resetNavigation(true);
                 showMessage('No valid route found for any strategy.', 'red');
@@ -224,13 +293,10 @@ function drawAllPathsAndTooltips() {
         });
         if (closestPoint && closestPoint.env) {
             const env = closestPoint.env;
-
-            // FIX: Safely handle potentially null values before calling toFixed()
             const windKtsText = env.wind_speed_mps !== null ? `${(env.wind_speed_mps * 1.94384).toFixed(1)} kts` : 'N/A';
             const windDirText = env.wind_direction_deg !== null ? `@ ${env.wind_direction_deg.toFixed(0)}°` : '';
             const waveHeightText = env.waves_height_m !== null ? `${env.waves_height_m.toFixed(1)} m` : 'N/A';
             const depthText = env.depth !== null ? `${env.depth.toFixed(0)} m` : 'N/A';
-
             const content = `
                 <b>Conditions at Point</b><br>
                 Wind: ${windKtsText} ${windDirText}<br>
@@ -254,18 +320,14 @@ function drawAllPathsAndTooltips() {
             const turfLine = turf.lineString(path.map(p => [p.lng, p.lat]));
             const smoothedLine = turf.bezierSpline(turfLine);
             const smoothedLatLngs = smoothedLine.geometry.coordinates.map(coords => [coords[1], coords[0]]);
-
             const polyline = L.polyline(smoothedLatLngs, strategyStyles[strategy]).addTo(routeLayer);
-            
             polyline.on('mousemove', (e) => onPathMouseOver(e, path));
             polyline.on('mouseout', onPathMouseOut);
-            
             polyline.on('click', () => {
                 const dropdown = document.getElementById('routingStrategy');
                 dropdown.value = strategy;
                 dropdown.dispatchEvent(new Event('change'));
             });
-
             routePolylines[strategy] = polyline;
         }
     }
@@ -284,18 +346,22 @@ function updateMetricsForSelectedStrategy() {
         const totalDistanceKm = calculateTotalDistance(path);
         calculateAndDisplayMetrics(path, speed, totalDistanceKm);
         analyzeAndDisplayCriticalPoints(path, parseFloat(document.getElementById('shipDraft').value));
+        document.getElementById('metrics-display').classList.remove('hidden');
     } else {
         document.getElementById('metrics-display').classList.add('hidden');
         criticalPointsLayer.clearLayers();
     }
 
+    // Highlight the selected path
     for (const strategy in routePolylines) {
         const polyline = routePolylines[strategy];
-        if (strategy === selectedStrategy) {
-            polyline.setStyle({ weight: 5, opacity: 1 });
-            polyline.bringToFront();
-        } else {
-            polyline.setStyle({ opacity: 0 });
+        if (polyline) {
+             if (strategy === selectedStrategy) {
+                polyline.setStyle({ weight: 6, opacity: 1 });
+                polyline.bringToFront();
+            } else {
+                polyline.setStyle({ weight: 3, opacity: 0.7 });
+            }
         }
     }
 }
@@ -339,6 +405,7 @@ function onMapClick(e){if(editMode||navigationState==='CALCULATING')return;if(na
 
 function calculateTotalDistance(path) {
     let totalDistance = 0;
+    if (!path || path.length < 2) return 0;
     for (let i = 1; i < path.length; i++) {
         const from = turf.point([path[i-1].lng, path[i-1].lat]);
         const to = turf.point([path[i].lng, path[i].lat]);
@@ -348,19 +415,29 @@ function calculateTotalDistance(path) {
 }
 
 function calculateAndDisplayMetrics(path, speed, totalDistanceKm){
-    const totalFuelLiters=path[path.length-1].totalFuel;
-    if(totalFuelLiters===undefined){console.error("Path data does not include totalFuel.");return}
-    const speedKmh=speed*1.852;
-    const totalHours=speedKmh>0?totalDistanceKm/speedKmh:0;
-    const days=Math.floor(totalHours/24);
-    const remainingHours=Math.round(totalHours%24);
-    const carbonTons=totalFuelLiters*0.0028 ;
-    const metricsDisplay=document.getElementById('metrics-display');
-    metricsDisplay.innerHTML=`
-        <div class="flex justify-between items-center mb-2"><span class="text-gray-400">Travel Time:</span><span class="font-bold text-blue-400">${days}d ${remainingHours}h</span></div>
-        <div class="flex justify-between items-center mb-2"><span class="text-gray-400">Total Distance:</span><span class="font-bold text-blue-400">${totalDistanceKm.toFixed(0)} km</span></div>
-        <div class="flex justify-between items-center mb-2"><span class="text-gray-400">Fuel Consumed:</span><span class="font-bold text-blue-400">${totalFuelLiters.toFixed(0)} L</span></div>
-        <div class="flex justify-between items-center"><span class="text-gray-400">CO₂ Emissions:</span><span class="font-bold text-blue-400">${carbonTons.toFixed(2)} tons</span></div>`;
+    const metricsDisplay = document.getElementById('metrics-display');
+    const metricsDetails = document.getElementById('metrics-details');
+    
+    const finalPoint = path[path.length - 1];
+    if (!finalPoint || typeof finalPoint.totalFuel === 'undefined') {
+        console.error("Path data does not include totalFuel.");
+        metricsDetails.innerHTML = `<p class="text-red-400">Error: Incomplete path data.</p>`;
+        metricsDisplay.classList.remove('hidden');
+        return;
+    }
+    const totalFuelLiters = finalPoint.totalFuel;
+    const speedKmh = speed * 1.852;
+    const totalHours = speedKmh > 0 ? totalDistanceKm / speedKmh : 0;
+    const days = Math.floor(totalHours / 24);
+    const remainingHours = Math.round(totalHours % 24);
+    const carbonTons = totalFuelLiters * 0.0028; // Simplified emission factor
+
+    metricsDetails.innerHTML = `
+        <div class="flex justify-between items-center"><span class="text-gray-400">Travel Time:</span><span class="font-bold text-blue-400">${days}d ${remainingHours}h</span></div>
+        <div class="flex justify-between items-center"><span class="text-gray-400">Total Distance:</span><span class="font-bold text-blue-400">${totalDistanceKm.toFixed(0)} km</span></div>
+        <div class="flex justify-between items-center"><span class="text-gray-400">Fuel Consumed:</span><span class="font-bold text-blue-400">${totalFuelLiters.toFixed(0)} L</span></div>
+        <div class="flex justify-between items-center"><span class="text-gray-400">CO₂ Emissions:</span><span class="font-bold text-blue-400">${carbonTons.toFixed(2)} tons</span></div>
+    `;
     metricsDisplay.classList.remove('hidden');
 }
 
@@ -381,6 +458,8 @@ function resetNavigation(showMsg = true){
     startMarker = null;
     endMarker = null;
     document.getElementById('metrics-display').classList.add('hidden');
+    document.getElementById('compare-routes-button').classList.add('hidden');
+    document.getElementById('profile-route-button').classList.add('hidden');
     hideHud();
     if(showMsg) showMessage('Route cleared. Ready for new route.','blue');
 }
@@ -502,12 +581,22 @@ function triggerPrediction(lat, lon, date) {
 function playAnimation() {
     if (!animationPath || animationPath.length < 2) return;
 
+    // MODIFIED: Hide non-selected routes when animation starts
+    const selectedStrategy = document.getElementById('routingStrategy').value;
+    for (const strategy in routePolylines) {
+        if (strategy !== selectedStrategy) {
+            const polyline = routePolylines[strategy];
+            if (polyline) {
+                polyline.setStyle({ opacity: 0 });
+            }
+        }
+    }
+
     if (boatAnimator) boatAnimator.stopAnimation();
 
     resetEnvLog();
 
     if (currentPath && currentPath.length > 0) {
-        // FIX: Update the HUD with the starting point data immediately
         updateHudWithLiveData(currentPath[0].env);
 
         const startPointLat = currentPath[0].lat;
@@ -519,7 +608,7 @@ function playAnimation() {
 
         if (gaPredictionTimer) clearInterval(gaPredictionTimer);
         gaPredictionTimer = setInterval(() => {
-            if (boatAnimator) {
+            if (boatAnimator && boatAnimator.boatMarker) {
                 const currentPosition = boatAnimator.boatMarker.getLatLng();
                 triggerPrediction(currentPosition.lat, currentPosition.lng, voyageDate);
             }
@@ -530,13 +619,6 @@ function playAnimation() {
     const params = {
         speed: document.getElementById('shipSpeed').value,
         draft: document.getElementById('shipDraft').value,
-        hpReq: document.getElementById('hpReq').value,
-        fuelRate: document.getElementById('fuelRate').value,
-        k: document.getElementById('hullFactor').value,
-        baseWeight: document.getElementById('baseWeight').value,
-        load: document.getElementById('load').value,
-        F: document.getElementById('foulingFactor').value,
-        S: document.getElementById('seaStateFactor').value,
     };
     const totalDistanceKm = calculateTotalDistance(animationPath);
 
@@ -562,6 +644,8 @@ function toggleBoatAnimation() {
         }
         showMessage('Animation Paused.', 'blue');
         hideHud();
+        // MODIFIED: Restore visibility of all routes when animation stops
+        updateMetricsForSelectedStrategy();
     } else {
         animButton.classList.add('toggled-on');
         if (animationPath && animationPath.length > 0) {
@@ -570,6 +654,229 @@ function toggleBoatAnimation() {
             showMessage('No route available to animate.', 'yellow');
         }
     }
+}
+
+// --- MODIFIED: Modal Functions ---
+function showComparisonModal() {
+    const modal = document.getElementById('comparison-modal');
+    modal.classList.remove('hidden');
+
+    const labels = ['Balanced', 'Fastest', 'Safest'];
+    const datasets = {
+        'Travel Time (hours)': [],
+        'Fuel Consumed (L)': [],
+        'Total Distance (km)': []
+    };
+
+    const speed = parseFloat(document.getElementById('shipSpeed').value);
+    const speedKmh = speed * 1.852;
+
+    for (const strategy of labels) {
+        const path = allCalculatedPaths[strategy.toLowerCase()];
+        if (path && path.length > 0) {
+            const distance = calculateTotalDistance(path);
+            const fuel = path[path.length - 1].totalFuel;
+            const time = speedKmh > 0 ? distance / speedKmh : 0;
+            
+            datasets['Travel Time (hours)'].push(time.toFixed(1));
+            datasets['Fuel Consumed (L)'].push(fuel.toFixed(0));
+            datasets['Total Distance (km)'].push(distance.toFixed(0));
+        } else {
+            datasets['Travel Time (hours)'].push(0);
+            datasets['Fuel Consumed (L)'].push(0);
+            datasets['Total Distance (km)'].push(0);
+        }
+    }
+
+    const ctx = document.getElementById('comparison-chart').getContext('2d');
+    if (comparisonChart) {
+        comparisonChart.destroy();
+    }
+    comparisonChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: 'Travel Time (hours)',
+                    data: datasets['Travel Time (hours)'],
+                    backgroundColor: 'rgba(59, 130, 246, 0.7)',
+                    borderColor: 'rgba(59, 130, 246, 1)',
+                    borderWidth: 1,
+                    yAxisID: 'yTime',
+                },
+                {
+                    label: 'Fuel Consumed (L)',
+                    data: datasets['Fuel Consumed (L)'],
+                    backgroundColor: 'rgba(249, 115, 22, 0.7)',
+                    borderColor: 'rgba(249, 115, 22, 1)',
+                    borderWidth: 1,
+                    yAxisID: 'yFuel',
+                },
+                {
+                    label: 'Total Distance (km)',
+                    data: datasets['Total Distance (km)'],
+                    backgroundColor: 'rgba(34, 197, 94, 0.7)',
+                    borderColor: 'rgba(34, 197, 94, 1)',
+                    borderWidth: 1,
+                    yAxisID: 'yDistance',
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                title: { display: true, text: 'Route Strategy Performance Metrics', color: '#FFF', font: { size: 16 } },
+                legend: { labels: { color: '#FFF' } }
+            },
+            scales: {
+                x: { ticks: { color: '#d1d5db' }, grid: { color: 'rgba(255, 255, 255, 0.1)' } },
+                yTime: { type: 'linear', position: 'left', title: { display: true, text: 'Time (hours)', color: '#d1d5db' }, ticks: { color: '#d1d5db' }, grid: { color: 'rgba(255, 255, 255, 0.1)' } },
+                yFuel: { type: 'linear', position: 'right', title: { display: true, text: 'Fuel (L)', color: '#d1d5db' }, ticks: { color: '#d1d5db' }, grid: { drawOnChartArea: false } },
+                yDistance: { type: 'linear', position: 'right', title: { display: true, text: 'Distance (km)', color: '#d1d5db' }, ticks: { color: '#d1d5db' }, grid: { drawOnChartArea: false }, offset: true }
+            }
+        }
+    });
+}
+
+function hideComparisonModal() {
+    const modal = document.getElementById('comparison-modal');
+    modal.classList.add('hidden');
+}
+
+// NEW: Functions for the Route Profile Modal
+function showProfileModal() {
+    if (!currentPath || currentPath.length === 0) {
+        showMessage('Please select a valid route first.', 'yellow');
+        return;
+    }
+    const modal = document.getElementById('profile-modal');
+    modal.classList.remove('hidden');
+
+    // Extract data for charting
+    const labels = [];
+    const waveData = [];
+    const windData = [];
+    const depthData = [];
+    let cumulativeDistance = 0;
+
+    for (let i = 0; i < currentPath.length; i++) {
+        const point = currentPath[i];
+        if (i > 0) {
+            const prevPoint = currentPath[i-1];
+            cumulativeDistance += turf.distance(
+                turf.point([prevPoint.lng, prevPoint.lat]),
+                turf.point([point.lng, point.lat]),
+                { units: 'kilometers' }
+            );
+        }
+        
+        // Add a data point roughly every 50km to keep the chart readable
+        if (i % Math.floor(currentPath.length / 50) === 0 || i === currentPath.length - 1) {
+            labels.push(cumulativeDistance.toFixed(0));
+            if (point.env) {
+                waveData.push(point.env.waves_height_m);
+                windData.push(point.env.wind_speed_mps);
+                // Invert depth for more intuitive visualization (like a seabed profile)
+                depthData.push(point.env.depth !== null ? -point.env.depth : null);
+            } else {
+                waveData.push(null);
+                windData.push(null);
+                depthData.push(null);
+            }
+        }
+    }
+
+    const ctx = document.getElementById('profile-chart').getContext('2d');
+    if (profileChart) {
+        profileChart.destroy();
+    }
+    profileChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: 'Sea Depth (m)',
+                    data: depthData,
+                    borderColor: 'rgba(59, 130, 246, 0.8)',
+                    backgroundColor: 'rgba(59, 130, 246, 0.2)',
+                    yAxisID: 'yDepth',
+                    tension: 0.3,
+                    fill: true,
+                },
+                {
+                    label: 'Wave Height (m)',
+                    data: waveData,
+                    borderColor: 'rgba(34, 197, 94, 0.8)',
+                    yAxisID: 'yConditions',
+                    tension: 0.3,
+                },
+                {
+                    label: 'Wind Speed (m/s)',
+                    data: windData,
+                    borderColor: 'rgba(239, 68, 68, 0.8)',
+                    yAxisID: 'yConditions',
+                    tension: 0.3,
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                title: { display: true, text: 'Conditions Along Voyage', color: '#FFF', font: { size: 16 } },
+                legend: { labels: { color: '#FFF' } },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            let label = context.dataset.label || '';
+                            if (label) {
+                                label += ': ';
+                            }
+                            if (context.parsed.y !== null) {
+                                // Undo the inversion for the depth tooltip
+                                const value = context.dataset.label === 'Sea Depth (m)' ? -context.parsed.y : context.parsed.y;
+                                label += value.toFixed(1);
+                            }
+                            return label;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: { 
+                    title: { display: true, text: 'Distance from Start (km)', color: '#d1d5db' },
+                    ticks: { color: '#d1d5db' }, 
+                    grid: { color: 'rgba(255, 255, 255, 0.1)' } 
+                },
+                yDepth: { 
+                    type: 'linear', 
+                    position: 'left', 
+                    title: { display: true, text: 'Sea Depth (m)', color: '#d1d5db' },
+                    ticks: { 
+                        color: '#d1d5db',
+                        callback: value => -value // Display positive numbers
+                    }, 
+                    grid: { color: 'rgba(255, 255, 255, 0.1)' } 
+                },
+                yConditions: {
+                    type: 'linear', 
+                    position: 'right', 
+                    title: { display: true, text: 'Meters or m/s', color: '#d1d5db' },
+                    ticks: { color: '#d1d5db' },
+                    grid: { drawOnChartArea: false }
+                },
+            }
+        }
+    });
+}
+
+function hideProfileModal() {
+    const modal = document.getElementById('profile-modal');
+    modal.classList.add('hidden');
 }
 
 function toggleGrid(){if(isGridVisible){map.removeLayer(gridLayer);isGridVisible=false;showMessage("Grid hidden.","blue")}else{if(gridDataCache){drawGrid();map.addLayer(gridLayer);isGridVisible=true}else{showMessage("Fetching grid data...","yellow");fetch("/api/grid").then(response=>response.json()).then(data=>{gridDataCache=data;drawGrid();map.addLayer(gridLayer);isGridVisible=true;showMessage("Grid displayed.","green")}).catch(error=>{console.error("Error fetching grid:",error);showMessage("Failed to load grid data.","red")})}}}
@@ -659,4 +966,3 @@ document.head.appendChild(style);
 
 // --- Let's ensure initializeApp is called at the end ---
 initializeApp();
-
