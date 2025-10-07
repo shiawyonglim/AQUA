@@ -14,11 +14,7 @@ Guaranteed Demo Success: Includes a one-click "Demo Route" button for a seamless
 🛠️ Tech Stack & Architecture
 AQUA is built with a modern, multi-service architecture that separates concerns for performance and scalability.
 
-Component
 
-Technology
-
-Purpose
 Front-End (Client)
 HTML5, Tailwind CSS, JavaScript, Leaflet.js
 Renders the interactive map, UI panels, and real-time simulation.
@@ -105,5 +101,6 @@ Interactive "No-Go" Zones: Allowing users to draw custom zones on the map (e.g.,
 Route Comparison: Offering multiple routing strategies, such as "Fastest," "Safest (Weather Avoidance)," and "Most Fuel-Efficient," and displaying the resulting paths for comparison.
 
 **[Click here to access the Project Drive](https://drive.google.com/drive/folders/1axyjNdWWTPJFyT0RH5i_vWjxACgbHBeM?usp=sharing)**
+
 
 
