@@ -157,17 +157,20 @@ app.post('/api/predict', async (req, res) => {
     }
 });
 
-app.get('/api/route', async (req, res) => {
+// MODIFIED: Changed from app.get to app.post to handle no-go zones in the body
+app.post('/api/route', async (req, res) => {
     const gridToUse = temporaryGrid || landGrid;
     if (!gridToUse) {
         return res.status(503).json({ error: 'Pathfinder is not ready yet.' });
     }
     
+    // MODIFIED: Read parameters from req.body
     const { 
-        start, end, shipLength,beam, speed, draft, hpReq, fuelRate, k, baseWeight, load, F, S, voyageDate
-    } = req.query;
+        start, end, shipLength, beam, speed, draft, hpReq, fuelRate, 
+        k, baseWeight, load, F, S, voyageDate, noGoZones 
+    } = req.body;
 
-    const requiredParams = { start, end, shipLength,beam,speed, draft, hpReq, fuelRate, k, baseWeight, load, F, S, voyageDate };
+    const requiredParams = { start, end, shipLength, beam, speed, draft, hpReq, fuelRate, k, baseWeight, load, F, S, voyageDate };
     for (const param in requiredParams) {
         if (!requiredParams[param]) {
             return res.status(400).json({ error: `Missing required parameter: ${param}.` });
@@ -175,11 +178,11 @@ app.get('/api/route', async (req, res) => {
     }
 
     try {
-        const startCoords = start.split(',').map(Number);
-        const endCoords = end.split(',').map(Number);
+        const startCoords = start; // Already an object {lat, lng}
+        const endCoords = end;     // Already an object {lat, lng}
         const envCache = new EnvironmentalDataCache(
-            { lat: startCoords[0], lng: startCoords[1] },
-            { lat: endCoords[0], lng: endCoords[1] },
+            { lat: startCoords.lat, lng: startCoords.lng },
+            { lat: endCoords.lat, lng: endCoords.lng },
             gridToUse,
             voyageDate
         );
@@ -213,13 +216,14 @@ app.get('/api/route', async (req, res) => {
             load: parseFloat(load), F: parseFloat(F), S: parseFloat(S)
         };
             
-        // MODIFIED: Call pathfinder to get all strategy paths
+        // MODIFIED: Call pathfinder to get all strategy paths, now including noGoZones
         const allPaths = pathfinder.findPath(
             gridToUse,
-            { lat: startCoords[0], lng: startCoords[1] },
-            { lat: endCoords[0], lng: endCoords[1] },
+            { lat: startCoords.lat, lng: startCoords.lng },
+            { lat: endCoords.lat, lng: endCoords.lng },
             params,
-            envCache
+            envCache,
+            noGoZones // NEW: Pass zones to pathfinder
         );
         
         // --- ENRICH AND SANITIZE ALL PATHS ---
