@@ -1,0 +1,128 @@
+{
+    "metadata": {
+        "model": "Genetic Algorithm AR(5)+Trend Live-Trained",
+        "run_at": "2025-10-17T21:32:20.872418",
+        "start_location": {
+            "lat": -0.798019799457533,
+            "lon": 105.69801976545118
+        },
+        "start_date": "2025-10-17",
+        "grounding_data": {
+            "depth": 29,
+            "wind_speed_mps": 0,
+            "wind_direction_deg": 0,
+            "current_speed_mps": 0.18347258865833282,
+            "current_direction_deg": 180,
+            "waves_height_m": 0.842740535736084,
+            "weekly_precip_mean": 0.1616179496049881,
+            "ice_conc": null,
+            "riskScore": 1.276727983104963,
+            "lat": -0.550137326820741,
+            "lon": 105.45013732504763
+        }
+    },
+    "forecast_horizon_hours": 18,
+    "optimized_coefficients": {
+        "wind_speed_mps_coeffs": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+        ],
+        "wind_direction_deg_coeffs": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+        ],
+        "current_speed_mps_coeffs": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+        ],
+        "current_direction_deg_coeffs": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+        ],
+        "waves_height_m_coeffs": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+        ],
+        "weekly_precip_mean_coeffs": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+        ],
+        "ice_conc_coeffs": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+        ]
+    },
+    "forecast_data": [
+        {
+            "timestamp": "2025-10-17T06:00:00",
+            "lat": -0.798019799457533,
+            "lon": 105.69801976545118,
+            "predicted_wind_speed_mps": 0,
+            "predicted_wind_direction_deg": 0,
+            "predicted_current_speed_mps": 0.18347258865833282,
+            "predicted_current_direction_deg": 180,
+            "predicted_waves_height_m": 0.842740535736084,
+            "predicted_weekly_precip_mean": 0.1616179496049881,
+            "predicted_ice_conc": 0.0
+        },
+        {
+            "timestamp": "2025-10-17T12:00:00",
+            "lat": -0.798019799457533,
+            "lon": 105.69801976545118,
+            "predicted_wind_speed_mps": 0,
+            "predicted_wind_direction_deg": 0,
+            "predicted_current_speed_mps": 0.18347258865833282,
+            "predicted_current_direction_deg": 180,
+            "predicted_waves_height_m": 0.842740535736084,
+            "predicted_weekly_precip_mean": 0.1616179496049881,
+            "predicted_ice_conc": 0.0
+        },
+        {
+            "timestamp": "2025-10-17T18:00:00",
+            "lat": -0.798019799457533,
+            "lon": 105.69801976545118,
+            "predicted_wind_speed_mps": 0,
+            "predicted_wind_direction_deg": 0,
+            "predicted_current_speed_mps": 0.18347258865833282,
+            "predicted_current_direction_deg": 180,
+            "predicted_waves_height_m": 0.842740535736084,
+            "predicted_weekly_precip_mean": 0.1616179496049881,
+            "predicted_ice_conc": 0.0
+        }
+    ]
+}
