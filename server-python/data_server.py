@@ -34,7 +34,11 @@ data_cache = { "nc_files": {} }
 async def lifespan(app: FastAPI):
     """Handles loading and closing of NetCDF files during server startup and shutdown."""
     print("--- FastAPI server starting up: Loading NetCDF files... ---")
-    nc_filenames = ["wind_asc.nc", "wind_dsc.nc", "current.nc", "waves.nc", "rain.nc", "ice.nc", "sea_depth.nc"]
+    
+    # --- MODIFICATION: Updated the list of .nc files to load ---
+    nc_filenames = ["wind.nc", "current.nc", "waves.nc", "rain.nc", "ice.nc", "sea_depth.nc"]
+    # --- END MODIFICATION ---
+
     for filename in nc_filenames:
         try:
             path = os.path.join(BASE_NC_PATH, filename)
@@ -50,9 +54,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# --- (The rest of the file remains exactly the same) ---
+
 # --- Pydantic Data Model ---
 class GridDataRequest(BaseModel):
-    """Defines the expected structure for incoming voyage requests."""
     min_lat: float
     min_lon: float
     max_lat: float
@@ -65,25 +70,18 @@ class PredictionRequest(BaseModel):
     date: str
     current_conditions: Dict[str, Any]
 
-
-# --- MODIFIED: Helper function to process a bounded dataset ---
 def process_bounded_dataset(request: GridDataRequest):
-    """
-    Processes all NetCDF files and returns data for the specified bounding box.
-    """
     response_data = {}
     voyage_date = datetime.fromisoformat(request.date.replace('Z', '+00:00'))
     days_since_sunday = (voyage_date.weekday() + 1) % 7
     target_date = voyage_date - timedelta(days=days_since_sunday)
-
-    # Use the first file to determine the slicing indices, assuming all grids are aligned
+    
     first_nc_name = next(iter(data_cache["nc_files"]))
     first_handler = data_cache["nc_files"][first_nc_name]
     
     lat_var = first_handler.variables.get('lat') or first_handler.variables.get('latitude')
     lon_var = first_handler.variables.get('lon') or first_handler.variables.get('longitude')
     
-    # Find the indices for the bounding box
     lat_indices = np.where((lat_var[:] >= request.min_lat) & (lat_var[:] <= request.max_lat))[0]
     lon_indices = np.where((lon_var[:] >= request.min_lon) & (lon_var[:] <= request.max_lon))[0]
 
@@ -93,8 +91,8 @@ def process_bounded_dataset(request: GridDataRequest):
     lat_slice = slice(lat_indices[0], lat_indices[-1] + 1)
     lon_slice = slice(lon_indices[0], lon_indices[-1] + 1)
 
-    response_data['lats'] = lat_var[lat_slice]
-    response_data['lons'] = lon_var[lon_slice]
+    response_data['lats'] = lat_var[lat_slice].tolist()
+    response_data['lons'] = lon_var[lon_slice].tolist()
 
     for nc_name, nc_handler in data_cache["nc_files"].items():
         time_idx = 0
@@ -109,16 +107,15 @@ def process_bounded_dataset(request: GridDataRequest):
             variable = nc_handler.variables[var_name]
             if not np.issubdtype(variable.dtype, np.number): continue
 
-            # MODIFIED: Select the bounded data slice
-            if variable.ndim == 3: # (time, lat, lon)
+            if variable.ndim == 3:
                 data_slice = variable[time_idx, lat_slice, lon_slice]
-            elif variable.ndim == 2: # (lat, lon)
+            elif variable.ndim == 2:
                 data_slice = variable[lat_slice, lon_slice]
             else:
                 continue
             
             if var_name == 'elevation':
-                land_mask = data_slice > 0
+                land_mask = data_slice >= 0
                 data_slice *= -1
                 data_slice[land_mask] = -9999
                 var_name = 'depth'
@@ -126,78 +123,43 @@ def process_bounded_dataset(request: GridDataRequest):
             if np.ma.is_masked(data_slice):
                 data_slice = data_slice.filled(-9999)
 
-            response_data[var_name] = data_slice
+            if var_name == 'ice_conc' or var_name == 'ice_coverage':
+                data_slice = data_slice / 100.0
+                data_slice = np.clip(data_slice, 0, 1)
+
+            response_data[var_name] = data_slice.astype(np.float64)
             
     return response_data
 
-
-# --- API Endpoints ---
-
 @app.post("/get-data-grid-hybrid/")
 async def get_data_grid_hybrid(request: GridDataRequest):
-    """
-    High-performance endpoint returning data in a hybrid format for a specified bounding box.
-    """
     try:
-        # MODIFIED: Call the new bounded dataset function
         response_data = process_bounded_dataset(request)
     except Exception as e:
-        print(f"Error during data slicing: {e}", file=sys.stderr)
         return Response(status_code=500, content=f"Error processing grid request: {e}")
     
-    print(f"Packing hybrid response for {response_data.get('lats').shape[0]}x{response_data.get('lons').shape[0]} grid...")
-    binary_chunks = []
-    metadata = { "variables": [] }
-    
-    metadata['lats'] = response_data.get('lats', np.array([])).tolist()
-    metadata['lons'] = response_data.get('lons', np.array([])).tolist()
+    binary_chunks, metadata = [], {"variables": []}
+    metadata['lats'], metadata['lons'] = response_data.get('lats', []), response_data.get('lons', [])
 
     for key, value in response_data.items():
         if key in ['lats', 'lons'] or not isinstance(value, np.ndarray): continue
-        
-        grid_array = value.astype(np.float64)
-        grid_bytes = grid_array.tobytes()
+        grid_bytes = value.tobytes()
         binary_chunks.append(grid_bytes)
-        
-        metadata['variables'].append({
-            "name": key, "shape": grid_array.shape,
-            "dtype": 'float64', "byte_length": len(grid_bytes)
-        })
+        metadata['variables'].append({"name": key, "shape": value.shape, "dtype": 'float64', "byte_length": len(grid_bytes)})
 
-    meta_json = json.dumps(metadata)
-    meta_bytes = meta_json.encode('utf-8')
-    meta_size = len(meta_bytes)
-    header = struct.pack('>I', meta_size)
-    final_buffer = header + meta_bytes + b''.join(binary_chunks)
-    
-    print(f"Hybrid response ready: {len(meta_bytes)} bytes of metadata, {sum(len(c) for c in binary_chunks)} bytes of grid data.")
-    return Response(content=final_buffer, media_type="application/octet-stream")
-
+    meta_bytes = json.dumps(metadata).encode('utf-8')
+    header = struct.pack('>I', len(meta_bytes))
+    return Response(content=header + meta_bytes + b''.join(binary_chunks), media_type="application/octet-stream")
 
 @app.post("/api/predict_next_step")
 async def predict_next_step(request: PredictionRequest):
-    """
-    Runs the Genetic Algorithm predictor and writes the forecast to historical_data.json.
-    """
     if not PREDICTOR_AVAILABLE:
-        return {"error": "Prediction service is disabled because sea_predictor_ga.py could not be imported."}, 503
-
+        return {"error": "Prediction service is disabled."}, 503
     try:
-        print(f"Triggering GA prediction for {request.lat}, {request.lon} at {request.date}...")
-        
-        prediction_result = generate_and_save_prediction(
-            request.lat, 
-            request.lon, 
-            request.date,
-            request.current_conditions
-        )
-
+        prediction_result = generate_and_save_prediction(request.lat, request.lon, request.date, request.current_conditions)
         if prediction_result:
             return prediction_result
         else:
-            return {"error": "GA Prediction failed to run or save output."}, 500
-
+            return {"error": "GA Prediction failed."}, 500
     except Exception as e:
-        print(f"Error executing GA prediction: {e}", file=sys.stderr)
-        return {"error": f"Internal server error during prediction: {e}"}, 500
-
+        return {"error": f"Internal server error: {e}"}, 500

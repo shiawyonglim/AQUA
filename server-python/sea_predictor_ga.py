@@ -16,7 +16,7 @@ POPULATION_SIZE = 60
 GENERATIONS = 30
 MUTATION_RATE = 0.1
 HISTORY_LENGTH = 5 # Number of previous data points used for prediction
-HISTORY_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'cache', 'environmental_history.json')
+HISTORY_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data', 'cache', 'environmental_history.json')
 
 # --- Live Data Handling ---
 
