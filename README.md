@@ -58,21 +58,25 @@ Bash
 cd /path/to/your/project
 
 # Install Python dependencies
+cd .\server-python\  
+
 pip install -r requirements.txt
 
 # Start the FastAPI server (runs on http://127.0.0.1:8000)
-uvicorn data_server:app --reload
-Terminal 2: Start the Node.js Routing Server
-Bash
+python -m uvicorn data_server:app --reload --host 0.0.0.0 --port 8000
 
+
+Terminal 2: Start the Node.js Routing Server
 # Navigate to the project's root directory in a new terminal
 cd /path/to/your/project
 
 # Install Node.js dependencies
+cd .\server-node\   
+
 npm install
 
 # Start the Express server (runs on http://localhost:3000)
-node server.js
+npm start
 3. Launch the Application
 Once both servers are running, open your web browser and navigate to:
 
@@ -97,3 +101,4 @@ Start the Simulation: Click the boat icon control button on the bottom right to 
 
 
 Monitor Live Data: As the boat travels, the HUD on the right will update with live environmental data and the 6-hour forecast from the AI model.
+
