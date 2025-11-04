@@ -312,7 +312,7 @@ export function recalculateAllPathsWithNewParams() {
 function _recalculateSinglePath(path, params, strategy) {
     if (!path || path.length < 2) return path;
 
-    const newPath = JSON.parse(JSON.stringify(path)); // Deep copy to avoid modifying original
+    const newPath = JSON.parse(JSON.stringify(path)); 
     let cumulativeFuel = 0;
     let cumulativeTime = 0;
 
@@ -391,7 +391,6 @@ function _calculateSegmentCostClient(fromPoint, toPoint, params, strategy = 'bal
 
 
 // --- Calculation Helpers (ported from a-star-pathfinder.js) ---
-
 function _calculateFuelPerKm(params) {
     const { speed, hpReq, fuelRate, k = 0.005, baseWeight, load, F = 1, S = 1 } = params;
     const speedKmh = speed * 1.852;
@@ -402,47 +401,54 @@ function _calculateFuelPerKm(params) {
     return fuelPerKm || 0.1;
 }
 
-export function getEffectiveSpeed(baseSpeedKmh, envData, headingDeg, params) {
-    let speedThroughWaterKmh = baseSpeedKmh;
-
+export function getEffectiveSpeed(baseSpeed, envData, headingDeg, params) {
+    const windSpeed = envData.wind_speed_mps || 0,
+        windDir = envData.wind_direction_deg || 0;
     const waveHeight = envData.waves_height_m || 0;
-    const waveDir = envData.wind_direction_deg || 0;
+    const currentSpeed = envData.current_speed_mps || 0,
+        currentDir = envData.current_direction_deg || 0;
     const iceConc = envData.ice_conc || 0;
-    const depth = envData.depth || Infinity;
+    const rainMM = envData.weekly_precip_mean || 0;
+    const depth = envData.depth;
 
-    if (waveHeight > 0.1) {
-        const relWaveAngle = Math.abs((waveDir - headingDeg + 360) % 360);
-        let waveResistanceFactor = (relWaveAngle <= 60 || relWaveAngle >= 300) ? 1.0 : (relWaveAngle > 60 && relWaveAngle < 120) ? 0.4 : 0;
-        const waveSpeedPenalty = (waveHeight * waveResistanceFactor * 0.10);
-        speedThroughWaterKmh *= (1 - Math.min(0.75, waveSpeedPenalty));
+    let effectiveSpeed = baseSpeed;
+
+    const EFFECTIVE_WEIGHT = 10000;
+    const rho_air = 1.225,
+        shipSpeed_mps = baseSpeed / 3.6;
+    const A_front = 0.08 * params.beam * params.shipLength;
+    const relWindAngle = ((headingDeg - windDir + 360) % 360),
+        cosWind = Math.cos(relWindAngle * Math.PI / 180);
+    const windRelV = windSpeed * cosWind + shipSpeed_mps,
+        Cd = 0.4;
+    const F_wind = 0.5 * rho_air * Cd * A_front * Math.max(0, windRelV) * Math.max(0, windRelV);
+    effectiveSpeed -= (F_wind / EFFECTIVE_WEIGHT) * 3.6;
+
+    const rho_water = 1025,
+        relCurrentAngle = ((headingDeg - currentDir + 360) % 360);
+    const currentAlong = currentSpeed * Math.cos(relCurrentAngle * Math.PI / 180);
+    const A_under = params.beam * params.draft;
+    const F_current = 0.5 * rho_water * A_under * currentAlong * currentAlong;
+    effectiveSpeed += Math.sign(currentAlong) * (F_current / EFFECTIVE_WEIGHT) * 3.6;
+
+    const waveDir = windDir,
+        waveDirFactor = Math.abs((waveDir - headingDeg + 360) % 360) <= 45 ? 1 : 0.5;
+    effectiveSpeed -= waveHeight * (params.beam * params.draft) * waveDirFactor * 0.1;
+
+    const icePenalty = (iceConc || 0) * 5 * Math.sqrt(10000 / EFFECTIVE_WEIGHT);
+    effectiveSpeed -= Math.min(icePenalty, 5);
+    
+    const rainPenalty = (rainMM || 0) * (0.1 * params.beam * params.shipLength) / Math.sqrt(EFFECTIVE_WEIGHT);
+    effectiveSpeed -= Math.min(rainPenalty, 3);
+
+    if (depth !== null && typeof depth === 'number') {
+        const draftRatio = depth / Math.max(0.001, params.draft);
+        if (draftRatio < 1.2) effectiveSpeed *= 0.7;
+        else if (draftRatio < 2.0) effectiveSpeed *= 1;
     }
 
-    if (iceConc > 0.05) {
-        speedThroughWaterKmh *= (1 - Math.pow(iceConc, 2));
-    }
-
-    if (depth !== Infinity) {
-        const depthToDraftRatio = depth / Math.max(0.1, params.draft);
-        if (depthToDraftRatio < 1.2) speedThroughWaterKmh *= 0.2;
-        else if (depthToDraftRatio < 1.5) speedThroughWaterKmh *= 0.6;
-        else if (depthToDraftRatio < 3.0) speedThroughWaterKmh *= 0.9;
-    }
-
-    const currentSpeedMps = envData.current_speed_mps || 0;
-    const currentDir = envData.current_direction_deg || 0;
-
-    if (currentSpeedMps > 0.05) {
-        const deg2rad = d => (d * Math.PI) / 180.0;
-        const ship_x = speedThroughWaterKmh * Math.sin(deg2rad(headingDeg));
-        const ship_y = speedThroughWaterKmh * Math.cos(deg2rad(headingDeg));
-        const currentSpeedKmh = currentSpeedMps * 3.6;
-        const cur_x = currentSpeedKmh * Math.sin(deg2rad(currentDir));
-        const cur_y = currentSpeedKmh * Math.cos(deg2rad(currentDir));
-        const effectiveSpeedKmh = Math.sqrt((ship_x + cur_x) ** 2 + (ship_y + cur_y) ** 2);
-        return Math.max(0.5, effectiveSpeedKmh);
-    }
-
-    return Math.max(0.5, speedThroughWaterKmh);
+    if (!isFinite(effectiveSpeed) || effectiveSpeed < 1) effectiveSpeed = 5;
+    return effectiveSpeed;
 }
 
 function _windCostMultiplier(boatBearing, baseFuelPerKm, SFOC, params, envData) {
@@ -459,6 +465,7 @@ function _windCostMultiplier(boatBearing, baseFuelPerKm, SFOC, params, envData) 
     const Pbase_kW = baseFuelPerHour_kg / Math.max(SFOC, 1e-9);
     return Padded_kW / Math.max(Pbase_kW, 1e-6);
 }
+
 function _currentCostMutiplier(boatBearing, params, envData) {
     if (!envData.current_speed_mps) return 0;
     const deg2rad = d => (d * Math.PI) / 180.0, Vship = params.speed * 0.514444;
@@ -468,6 +475,7 @@ function _currentCostMutiplier(boatBearing, params, envData) {
     if (SOG_kmh < 0.0001) return Infinity;
     return (((Vship * 3.6) / SOG_kmh) - 1) * 0.35;
 }
+
 function _waveCostMutiplier(boatBearing, params, envData) {
     if (!envData.waves_height_m) return 0;
     const displacement = (params.baseWeight + params.load) || 1;
@@ -476,6 +484,7 @@ function _waveCostMutiplier(boatBearing, params, envData) {
     let factor = (delta <= 45 || delta >= 315) ? 1.0 : (delta >= 135 && delta <= 225) ? -0.3 : 0.4;
     return k * envData.waves_height_m * factor * ((params.speed * 0.514444) / (10 * 0.514444)) ** 2;
 }
+
 function _rainCostMutiplier(params, envData) {
     if (!envData.weekly_precip_mean) return 0;
     const displacement = (params.baseWeight + params.load) || 1;

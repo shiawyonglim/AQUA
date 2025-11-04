@@ -29,7 +29,10 @@ export async function initializeUI() {
     // MERGED: Add listeners for both ship type changes and individual parameter changes
     document.getElementById('shipType').addEventListener('change', () => {
         updateShipParameters();
-        App.recalculateAllPathsWithNewParams(); // Recalculate after presets are loaded
+        // If a route is already displayed, trigger a full recalculation from the server
+        if (state.navigationState === 'ROUTE_DISPLAYED') {
+            App.calculateAndFetchRoute(state.startPoint, state.endPoint);
+        }
     });
 
     const recalcInputs = ['shipLength', 'beam', 'baseWeight', 'load', 'shipSpeed', 'shipDraft', 'hpReq', 'fuelRate'];
@@ -148,8 +151,12 @@ function analyzeAndDisplayCriticalPoints(path, shipDraft) {
     let maxWaves = { val: -1, point: null }, maxWind = { val: -1, point: null }, minDepth = { val: Infinity, point: null };
     for (const p of path) {
         if (p.env) {
-            if (p.env.waves_height_m > maxWaves.val) maxWaves = { val: p.env.waves_height_m, point: p };
-            if (p.env.wind_speed_mps > maxWind.val) maxWind = { val: p.env.wind_speed_mps, point: p };
+            if (p.env.waves_height_m !== null && p.env.waves_height_m > maxWaves.val) {
+            maxWaves = { val: p.env.waves_height_m, point: p };
+            }
+            if (p.env.wind_speed_mps !== null && p.env.wind_speed_mps > maxWind.val) {
+            maxWind = { val: p.env.wind_speed_mps, point: p };
+            }
             if (p.env.depth !== null && p.env.depth < minDepth.val) minDepth = { val: p.env.depth, point: p };
         }
     }
