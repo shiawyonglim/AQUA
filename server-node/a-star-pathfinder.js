@@ -618,7 +618,6 @@ class AStarPathfinder {
     
         let speedThroughWaterKmh = baseSpeedKmh;
     
-        // Environmental factors with defaults
         const waveHeight = envData.waves_height_m || 0;
         const waveDir = envData.wind_direction_deg || 0; // Assume waves align with wind
         const iceConc = envData.ice_conc || 0;           // 0.0 to 1.0
@@ -657,7 +656,6 @@ class AStarPathfinder {
             }
         }
     
-        // --- Step 2: Calculate Speed Over Ground (SOG) using Vector Addition ---
     
         const currentSpeedMps = envData.current_speed_mps || 0;
         const currentDir = envData.current_direction_deg || 0;

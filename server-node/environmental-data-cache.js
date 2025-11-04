@@ -1,36 +1,23 @@
 // ===================================================================================
-// environmental-data-cache.js (MODIFIED FOR BOUNDED BOX REQUESTS)
+// environmental-data-cache.js (MODIFIED FOR SINGLE WIND FILE)
 // -----------------------------------------------------------------------------------
-// This version has been updated to request a smaller, more efficient "bounding box"
-// of data from the Python server instead of the entire global dataset.
+// This version has been updated to read final wind data directly, removing the
+// vector averaging logic for ascending and descending passes.
 // ===================================================================================
 
 const fetch = require('node-fetch');
 
-/**
- * A robust binary-search-based function to find the closest index for a target value
- * in an array that can be sorted in either ascending or descending order.
- * @param {Array<number>} arr The sorted array of numbers (lats or lons).
- * @param {number} target The target value (a specific lat or lon).
- * @returns {number} The closest index in the array, or -1 if the array is invalid.
- */
 function findClosestIndex(arr, target) {
-    if (!arr || arr.length === 0) {
-        return -1;
-    }
-
-    let low = 0;
-    let high = arr.length - 1;
+    if (!arr || arr.length === 0) return -1;
+    let low = 0, high = arr.length - 1;
     const isAscending = arr[low] < arr[high];
-
     if (isAscending) {
         if (target <= arr[low]) return low;
         if (target >= arr[high]) return high;
-    } else { // Descending
+    } else {
         if (target >= arr[low]) return low;
         if (target <= arr[high]) return high;
     }
-
     while (low <= high) {
         const mid = Math.floor(low + (high - low) / 2);
         const midVal = arr[mid];
@@ -38,32 +25,23 @@ function findClosestIndex(arr, target) {
         if (isAscending) {
             if (midVal < target) low = mid + 1;
             else high = mid - 1;
-        } else { // Descending
+        } else {
             if (midVal > target) low = mid + 1;
             else high = mid - 1;
         }
     }
-
     if (low >= arr.length) low = arr.length - 1;
     if (high < 0) high = 0;
-    const distLow = Math.abs(arr[low] - target);
-    const distHigh = Math.abs(arr[high] - target);
-    return distLow <= distHigh ? low : high;
+    return Math.abs(arr[low] - target) <= Math.abs(arr[high] - target) ? low : high;
 }
 
-
- //A class to manage fetching, caching, and accessing environmental data for a voyage.
- 
 class EnvironmentalDataCache {
     constructor(startLatLng, endLatLng, landGrid, voyageDate) {
         this.voyageDate = voyageDate;
         this.data = null;
         this.FASTAPI_URL = "http://127.0.0.1:8000/get-data-grid-hybrid/";
-        this.debugCounter = 0;
-        this.debugLogInterval = 500;
         
-        // --- MODIFIED: Calculate a bounding box instead of using the full map ---
-        const PADDING = 5; // Add 5 degrees of padding around the route for flexibility
+        const PADDING = 5;
         this.bounds = {
             min_lat: Math.max(-90, Math.min(startLatLng.lat, endLatLng.lat) - PADDING),
             max_lat: Math.min(90, Math.max(startLatLng.lat, endLatLng.lat) + PADDING),
@@ -88,8 +66,7 @@ class EnvironmentalDataCache {
 
             const arrayBuffer = await response.arrayBuffer();
             const buffer = Buffer.from(arrayBuffer);
-            console.log(`Received hybrid response of size: ${(buffer.length / 1024 / 1024).toFixed(2)} MB`);
-
+            
             const metaSize = buffer.readUInt32BE(0);
             const metaJSON = buffer.slice(4, 4 + metaSize).toString('utf-8');
             const metadata = JSON.parse(metaJSON);
@@ -99,15 +76,9 @@ class EnvironmentalDataCache {
 
             for (const varInfo of metadata.variables) {
                 const chunk = buffer.slice(currentOffset, currentOffset + varInfo.byte_length);
-                let typedArray;
-                if (varInfo.dtype === 'float64') {
-                    const alignedBuffer = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.length);
-                    typedArray = new Float64Array(alignedBuffer);
-                } else {
-                    console.warn(`Unsupported dtype '${varInfo.dtype}'. Skipping.`);
-                    currentOffset += varInfo.byte_length;
-                    continue;
-                }
+                const alignedBuffer = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.length);
+                const typedArray = new Float64Array(alignedBuffer);
+
                 const grid = [];
                 const [rows, cols] = varInfo.shape;
                 for (let i = 0; i < rows; i++) {
@@ -138,34 +109,11 @@ class EnvironmentalDataCache {
             return (grid?.[lat_idx]?.[lon_idx] !== undefined) ? grid[lat_idx][lon_idx] : defaultVal;
         };
 
-        // --- Wind Vector Averaging ---
-        const speed_asc = getValue('wind_speed_mps_asc');
-        const card_asc = getValue('wind_cardinal_asc');
-        const speed_dsc = getValue('wind_speed_mps_dsc');
-        const card_dsc = getValue('wind_cardinal_dsc');
+        // --- MODIFIED: Read wind data directly, removing vector averaging ---
+        const wind_speed_mps = getValue('wind_speed_mps');
+        const wind_cardinal = Math.round(getValue('wind_cardinal'));
         
-        let final_wind_speed = 0;
-        let final_wind_cardinal = 0;
-
-        if (speed_asc > -9999 && speed_dsc > -9999 && (speed_asc > 0 || speed_dsc > 0)) {
-            const angle_asc_rad = (90 - (card_asc * 45)) * (Math.PI / 180);
-            const angle_dsc_rad = (90 - (card_dsc * 45)) * (Math.PI / 180);
-            const x_asc = speed_asc * Math.cos(angle_asc_rad);
-            const y_asc = speed_asc * Math.sin(angle_asc_rad);
-            const x_dsc = speed_dsc * Math.cos(angle_dsc_rad);
-            const y_dsc = speed_dsc * Math.sin(angle_dsc_rad);
-            
-            const x_avg = (x_asc + x_dsc) / 2;
-            const y_avg = (y_asc + y_dsc) / 2;
-            
-            final_wind_speed = Math.sqrt(x_avg**2 + y_avg**2);
-            const final_angle_rad = Math.atan2(y_avg, x_avg);
-            const final_angle_deg = (final_angle_rad * (180 / Math.PI));
-            
-            const cardinal_float = (90 - final_angle_deg) / 45.0;
-            final_wind_cardinal = Math.round((cardinal_float % 8 + 8) % 8);
-        }
-
+        // --- Read all other variables directly ---
         const depth = getValue('depth');
         const current_speed_mps = getValue('current_speed_mps');
         const current_cardinal = Math.round(getValue('current_cardinal'));
@@ -175,8 +123,10 @@ class EnvironmentalDataCache {
         
         return {
             depth: (depth > -9999) ? depth : null,
-            wind_speed_mps: (final_wind_speed > -9999) ? final_wind_speed : null,
-            wind_direction_deg: (final_wind_cardinal > -9999) ? (final_wind_cardinal * 45) : null,
+            // --- MODIFIED: Use the new direct wind variables ---
+            wind_speed_mps: (wind_speed_mps > -9999) ? wind_speed_mps : null,
+            wind_direction_deg: (wind_cardinal > -9999) ? (wind_cardinal * 45) : null,
+            
             current_speed_mps: (current_speed_mps > -9999) ? current_speed_mps : null,
             current_direction_deg: (current_cardinal > -9999) ? (current_cardinal * 45) : null,
             waves_height_m: (waves_height_m > -9999) ? waves_height_m : null,
