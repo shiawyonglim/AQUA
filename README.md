@@ -44,9 +44,9 @@ A modern web browser (Chrome, Firefox, etc.)
 1. Download Environmental Data
 The application relies on a large set of environmental data files (.nc format). These are essential for the pathfinding algorithm.
 
-➡️ Click here to download the nc_data folder from Google Drive
+[➡️ Click here to download the nc_data folder from Google Drive](https://drive.google.com/drive/folders/1wkCSUezSwOGkijrHN1F0qTKo3gYxM1o_?usp=sharing)
 
-Place the downloaded nc_data folder in the root directory of the project.
+Please download the **entire folder** with the exact name **nc_data** and place it inside the **data** folder in your project directory.
 
 2. Set Up the Back-End Services
 You will need to run two separate servers in two separate terminals.
@@ -94,5 +94,6 @@ Configure Vessel: Select a ship type from the dropdown or enter custom parameter
 Analyze & Compare: Once calculated, all route strategies will be displayed. Use the sidebar to view key metrics, compare all routes in the dashboard, or view the environmental profile of a specific route.
 
 Start the Simulation: Click the boat icon control button on the bottom right to begin the real-time voyage animation.
+
 
 Monitor Live Data: As the boat travels, the HUD on the right will update with live environmental data and the 6-hour forecast from the AI model.
